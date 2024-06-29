@@ -1,0 +1,313 @@
+	org	$a000
+
+kpbuf	equ	$0200		; The keypress buffer
+prvcrsr equ	$0208		; The previous (start of line) cursor location
+curcrsr equ	$020A		; The current cursor location
+isshft	equ	$020C		; The shift key is down flag
+crsdly	equ	$020D		; The cursor delay variable
+
+crsrlut	fcb	$2,$a,$e,$f,$d,$5,$1,$0
+
+start	lda	#$ff
+	tfr	a,dp		; Set the direct page to the I/O space
+	lds	#$0100		; Set the bottom of stack to $0100
+	; Initialize the variable area
+	ldx	#$0200		; Clear the keypress buffer
+!	clr	,x
+	com	,x+
+	cmpx	#$0210
+	bne	<
+	ldx	#$0400		; Initialize the cursor locations
+	stx	prvcrsr
+	stx	curcrsr
+
+	; Clear out PIA control registers
+	clr	<$01
+	clr	<$03
+	clr	<$21
+	clr	<$23
+	; Set PIA I/O directions
+	clr	<$00
+	lda	#$ff
+	sta	<$02
+	deca
+	sta	<$20
+	lda	#$fa
+	sta	<$22
+	; Set PIA control registers for operation
+	lda	#$34
+	sta	<$01
+	sta	<$21
+	inca
+	sta	<$03
+	lda	#$3c
+	sta	<$23
+	; clear out all interrupt flags
+	lda	<$00
+	lda	<$02
+	lda	<$20
+	lda	<$22
+	; mask FIRQ and IRQ
+	orcc	#$50
+	
+	; Set up the SAM
+	ldx	#$FFC0
+	clra
+	; ; Set display mode control to text/semi4
+	sta ,x++
+	sta ,x++
+	sta ,x++
+	; ; Set video memory offset
+	sta ,x++
+	leax 1,x
+	sta ,x+
+	sta ,x++
+	sta ,x++
+	sta ,x++
+	sta ,x++
+	; ; Page 1, set to 0 by definition
+	sta ,x++
+	; ; CPU rate
+	sta ,x++
+	sta ,x++
+	; ; Memory size
+	sta ,x++
+	leax 1,x
+	sta ,x+
+	; ; Map type, set to 0 by definition
+	sta ,x
+
+	; Set the VDG operation bits
+	lda	#$08
+	sta	<$22
+
+	; Clear the screen
+	ldd	#$2020
+	ldx	#$0400
+!	std	,x++
+	cmpx	#$0600
+	blo	<
+
+	; Pretty much everything happens in the main loop.  This loop executes
+	; at most once per vertical sync.
+mainlp	sync
+	lda	<$02
+	lda	<$00
+
+	; begin keyboard poll
+	clr	isshft		; Clear the shift flag
+	lda	#$7f		; Initial setup to poll column 7
+	orcc	#$01		; Set the carry flag—we'll need that
+	ldx	#kpbuf		; Point X to the keypress buffer
+	ldy	curcrsr		; Point Y to the current cursor position
+polllp	sta	<$02		; send the poll
+	ldb	<$00		; Grab the poll value
+	pshs	b,cc		; We're going to be manipulating the poll value
+	bita	#$80		; Have we passed column 7?
+	bne	>		; Yes, skip the shift key check
+	bitb	#$40		; Do we have a shift key
+	bne	>		; No, skip registering a shift key press
+	com	isshft		; Set the shift flag
+!	eorb	,x		; B now contains the key deltas
+	andb	1,s		; delta and fresh scan = releases
+	; Start processing the key releases
+	bitb	#$7f		; Does this column have anything for us?
+	beq	pollfin		; We have nothing to do, so move on.
+	coma			; Let's handle column numbers in positive sense
+	; Column checks
+columns	bita	#$07		; Are we in columns 0, 1, or 2?
+	beq	>		; No, skip the enter, clear, or break check.
+	bitb	#$40		; Do we have an enter, clear, or break?
+	beq	>		; No, keep moving.
+	bsr	procecb		; Process enter, clear, and break
+!	andb	#$3f		; Do we have a character to handle?
+	beq	colend		; No, skip to the next column.
+	; We know we have at least one character to process.  So we can start
+	; by handling the data at the cursor position.
+	clr	,y		; We need to calculate the column number
+	bita	#%11110000	; Bit # & 0b100?
+	beq	>		; No, continue on
+	inc	,y		; Yes, set the bit
+!	lsl	,y		; Next bit, please
+	bita	#%11001100	; Bit # & 0b010?
+	beq	>		; No, continue on
+	inc	,y		; Yes, set the bit
+!	lsl	,y		; Next bit, please
+	bita	#%10101010	; Bit # & 0b001?
+	beq	rowlp		; No, continue on
+	inc	,y		; Yes, set the bit
+rowlp	lsrb			; Push off the zeroth bit
+	bcc	nextrow		; If it's zero, skip to the next row
+	leay	1,y		; If not, we've got the value in y.
+	lbsr	chradj		; Adjust the character based upon matrix pos'n
+	tstb			; and check to see if we have more characters.
+	beq	colend		; We don't, so end the column.
+	pshs	a		; We do, so we need to copy over the row value
+	lda	-1,y		; from our previous character in order to allow
+	anda	#$f8		; the row calculation to continue seamlessly.
+	sta	,y
+	puls	a
+nextrow	pshs	b
+	ldb	#$08		; Add 8 to the value at the cursor position
+	addb	,y
+	stb	,y
+	puls	b
+	bra	rowlp		; And continue with the row loop
+colend	coma
+	bsr	scrlchk		; Check if we need to scroll
+	sty	curcrsr		; Update the cursro position
+pollfin	puls	b,cc		; get the poll value back
+	stb	,x+		; and save it in the poll buffer
+	rora			; Move to the next column
+	bcs	polllp		; A clear carry means we're done
+	lbsr	shwcrsr		; show the cursor
+	lbra	mainlp
+
+	; Process an enter, clear, or break
+procecb	bita	#$01		; Is this an enter?
+	beq	>		; No, check for clear.
+	pshs	d		; Yes, process the enter key
+	ldb	#$20		; Clear the screen location at the current
+	stb	,y		; cursor location
+	tfr	y,d		; Get the current cursor location
+	andb	#$e0		; Set it to the beginning of the line
+	addd	#$20		; and move it to the next line.
+	std	curcrsr		; Make this the current position and
+	std	prvcrsr		; the start of entry.
+	tfr	d,y		; Use the new position.
+	puls	d
+	rts
+!	bita	#$02		; Is this a clear key?
+	beq	1f		; No, it must be a break.
+	ldy	#$0400		; Point to the top of the screen
+	sty	curcrsr		; Make this the current position and
+	sty	prvcrsr		; the start of entry.
+	pshs	d
+	ldd	#$2020
+!	std	,y++
+	cmpy	#$0600
+	blo	<
+	ldy	#$0400
+	puls	d
+1	rts			; Right now, break doesn't do anything.
+
+	; Handle any need to scroll
+scrlchk	cmpy	#$0600		; Is the cursor off the screen?
+	blo	2f		; No, we don't need to scroll.
+	pshs	d,x		; Yes, we need to scroll.
+	ldx	#$0420		; Set X to the second line
+!	cmpx	#$0620		; Have we reached the end?
+	bge	1f		; Yes, clean up.
+	ldd	,x		; No, grab the next pair of characters.
+	std	-$20,x		; and move them one line up.
+	leax	2,x
+	bra	<		; Repeat the loop
+1	leay	-$20,y		; Adjust the cursor position
+	ldd	#$2020
+	tfr	y,x		; Begin clearing out the rest of the line
+!	std	,x++
+	cmpx	#$0600
+	blo	<
+	puls	x,d		; Restore the values we clobbered
+2 	rts
+
+	; Adjust the character value based upon matrix position and flags
+chradj	pshs	d		; We'll need this space
+	lda	-1,y		; Grab the character value under test
+	cmpa	#$2c		; Is this the set of '.-,?'?
+	blo	1f		; No, continue
+	tst	isshft		; Yes, low specials are $20–$2f when unshifted
+	beq	>		; We're unshifted, so skip shifting
+	adda	#$10		; We're shifted, so adjust
+!	bra	chradj_		; and finish up
+1	cmpa	#$21		; Is this '[1-9:;]'?
+	blo	1f		; No, continue
+	tst	isshft		; Yes, high specials are $20-$2f when shifted
+	bne	>		; We're shifted, so we skip unshifting
+	adda	#$10		; We're unshifted, so adjust
+!	bra	chradj_		; and finish up.
+1	cmpa	#$20		; Is this the zero key?
+	bne	>		; No, continue
+	adda	#$10		; Yes adjust to a displayed zero
+	bra	chradj_		; and finish up.
+!	cmpa	#$1f		; Is this the space bar?
+	bne	>		; No, continue
+	inca			; Yes, change the character value to a space.
+	bra	chradj_
+!	cmpa	#$1b		; Is this an arrow key?
+	blo	>		; No, continue.
+	bsr	doarrow		; Yes, handle the arrow key
+	bra	chradj_		; and finish up.
+!	tsta			; Is this an alpha character?
+	beq	chradj_		; No, we're done.
+	tst	isshft		; Is the shift key pressed?
+	beq	chradj_		; No, we're done.
+	adda	#$40		; Yes, make it uppercase.
+chradj_	sta	-1,y		; Store the modified character
+	puls	d
+	rts
+
+	; process an arrow key
+doarrow	cmpa	#$1b		; Is this the up arrow?
+	bne	>		; No, continue
+	lda	#$1e		; Yes, have it display the up arrow
+	rts			; and continue.
+!	cmpa	#$1c		; Is this the down arrow?
+	beq	>		; No, but…
+	cmpa	#$1e		; Is this the right arrow?
+	bne	1f		; No, continue
+!	leay	-1,y		; Yes, reset the cursor location and
+	lda	#$20		; clear the screen locations.
+	sta	,y
+	sta	1,y
+	lda	-1,y
+	rts
+1	cmpa	#$1d		; Is this the left arrow?
+	bne	>		; No, continue
+	leay	-1,y		; Yes; at the least we move back one.
+	lda	#$20
+	sta	,y
+	sta	1,y
+	cmpy	prvcrsr		; Are we at the start of input location?
+	ble	>		; Yes, continue
+	lda	#$20		; No, we're doing some clearing.
+	leay	-1,y		; The new cursor position is *behind* the cur-
+	sta	,y		; rent character position.  Clear it.
+!	lda	-1,y		; Make sure we restore the character
+	rts
+
+shwcrsr	ldy	curcrsr
+	lda	#$03		; Four frame delay for cursor shape update
+	inc	crsdly
+	bita	crsdly		; Have we delayed four frames?
+	beq	>		; Yes, update the cursor shape
+	rts			; No, skip all this nonsense.
+!	ldb	,y		; The current cursor character
+	cmpb	#$20		; Is it a blank?
+	bne	>		; Nope, skip ahead
+	ldb	#$82		; Yep, initialize
+	stb	,y		; and save the value.
+	rts
+!	lda	,y		; We need to split color and character, so
+	anda	#$f0		; a contains color
+	andb	#$0f		; and b contains shape.
+	tstb			; is it the last shape?
+	bne	1f		; No, we need to loop.
+	adda	#$10		; Next color, please
+	bcc	>		; If carry is set, we wrapped around.
+	adda	#$80		; Get us back into the graphics characters.
+!	ora	#$02		; First shape, please
+	sta	,y		; Set the cursor and
+	rts			; we're done
+1	ldx	#crsrlut	; We'll run through the lookup table.
+!	cmpb	,x+		; Is this the one?
+	bne	<		; Nope, continue until we find it
+	ora	,x		; Found it, set the new shape
+	sta	,y		; Store the cursor color and shape
+	rts			; And we're done
+
+end	bra	end
+
+
+	org	$bffe
+	fdb	start

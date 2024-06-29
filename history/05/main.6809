@@ -1,0 +1,518 @@
+	; Error vector table $0100–$01ff
+	; Each entrey in this table will contain the address for the error han-
+	;   dling code used for a given error
+	org	$0100
+e_table
+e_dfalt	rmb	2		; Default error handler
+e_toknf	rmb	2		; Token not found
+e_tokln rmb	2		; Token too long
+e_stkdp	rmb	2		; Too few parameters
+e_div0	rmb	2		; Divide by zero
+e_mulof	rmb	2		; Multiplicative overflow
+e_prnge	rmb	2		; Parameter out of range
+e_nptbl	rmb	2		; Unprintable character
+	
+	; System variables
+	org	$0200
+kpbuf	rmb	8		; The keypress buffer
+prvcrsr rmb	2		; The previous (start of line) cursor location
+curcrsr rmb	2		; The current cursor location
+prtcrsr	rmb	2		; The current print cursor location
+isshft	rmb	1		; The shift key is down flag
+crsdly	rmb	1		; The cursor delay variable
+tokbuf	rmb	$20		; The token processing buffer
+eotbuf
+dicttop	rmb	2		; The top of the dictionary
+radix	rmb	1		; The current system radix
+
+	org	$a000
+	; System constants
+sysstk	equ	$0100
+prmstk	equ	$8000
+scrtop	equ	$0400
+scrbot	equ	$0600
+crsrlut	fcb	$2,$a,$e,$f,$d,$5,$1,$0
+
+	; Operating system entry point
+start	lda	#$ff
+	tfr	a,dp		; Set the direct page to the I/O space
+	lds	#sysstk		; Set the bottom of stack to $0100
+	ldu	#prmstk		; Set the bottom of the parameter stack to $8000
+	; Initialize the error vector table
+	ldx	#e_table
+	ldd	#_edfalt
+	std	,x++
+	ldd	#_etoknf
+	std	,x++
+	ldd	#_etokln
+	std	,x++
+	ldd	#_estkdp
+	std	,x++
+	ldd	#_ediv0
+	std	,x++
+	ldd	#_emulof
+	std	,x++
+	ldd	#_eprnge
+	std	,x++
+	ldd	#_enptbl
+	std	,x++
+	; Initialize the variable area
+	ldx	#kpbuf		; Clear the keypress buffer
+!	clr	,x
+	com	,x+
+	cmpx	#prvcrsr
+	bne	<
+	ldx	#scrtop		; Initialize the cursor locations
+	stx	prvcrsr
+	stx	curcrsr
+	ldd	#_dicttop	; Initialize the dictionary top location
+	std	dicttop
+	lda	#$0a		; The initial radix for the system
+	sta	radix
+
+	; Clear out PIA control registers
+	clr	<$01
+	clr	<$03
+	clr	<$21
+	clr	<$23
+	; Set PIA I/O directions
+	clr	<$00
+	lda	#$ff
+	sta	<$02
+	deca
+	sta	<$20
+	lda	#$fa
+	sta	<$22
+	; Set PIA control registers for operation
+	lda	#$34
+	sta	<$01
+	sta	<$21
+	inca
+	sta	<$03
+	lda	#$3c
+	sta	<$23
+	; clear out all interrupt flags
+	lda	<$00
+	lda	<$02
+	lda	<$20
+	lda	<$22
+	; mask FIRQ and IRQ
+	orcc	#$50
+	
+	; Set up the SAM
+	ldx	#$FFC0
+	clra
+	; ; Set display mode control to text/semi4
+	sta ,x++
+	sta ,x++
+	sta ,x++
+	; ; Set video memory offset
+	sta ,x++
+	leax 1,x
+	sta ,x+
+	sta ,x++
+	sta ,x++
+	sta ,x++
+	sta ,x++
+	; ; Page 1, set to 0 by definition
+	sta ,x++
+	; ; CPU rate
+	sta ,x++
+	sta ,x++
+	; ; Memory size
+	sta ,x++
+	leax 1,x
+	sta ,x+
+	; ; Map type, set to 0 by definition
+	sta ,x
+
+	; Set the VDG operation bits
+	lda	#$08
+	sta	<$22
+
+	; Clear the screen
+	ldd	#$2020
+	ldx	#scrtop
+!	std	,x++
+	cmpx	#scrbot
+	blo	<
+
+	; Pretty much everything happens in the main loop.  This loop executes
+	; at most once per vertical sync.
+mainlp	sync
+	lda	<$02
+	lda	<$00
+
+	; begin keyboard poll
+	clr	isshft		; Clear the shift flag
+	lda	#$7f		; Initial setup to poll column 7
+	orcc	#$01		; Set the carry flag—we'll need that
+	ldx	#kpbuf		; Point X to the keypress buffer
+	ldy	curcrsr		; Point Y to the current cursor position
+polllp	sta	<$02		; send the poll
+	ldb	<$00		; Grab the poll value
+	pshs	b,cc		; We're going to be manipulating the poll value
+	bita	#$80		; Have we passed column 7?
+	bne	>		; Yes, skip the shift key check
+	bitb	#$40		; Do we have a shift key
+	bne	>		; No, skip registering a shift key press
+	com	isshft		; Set the shift flag
+!	eorb	,x		; B now contains the key deltas
+	andb	1,s		; delta and fresh scan = releases
+	; Start processing the key releases
+	bitb	#$7f		; Does this column have anything for us?
+	beq	pollfin		; We have nothing to do, so move on.
+	coma			; Let's handle column numbers in positive sense
+	; Column checks
+columns	bita	#$07		; Are we in columns 0, 1, or 2?
+	beq	>		; No, skip the enter, clear, or break check.
+	bitb	#$40		; Do we have an enter, clear, or break?
+	beq	>		; No, keep moving.
+	pshs	d,x
+	bsr	procecb		; Process enter, clear, and break
+	puls	d,x
+!	andb	#$3f		; Do we have a character to handle?
+	beq	colend		; No, skip to the next column.
+	; We know we have at least one character to process.  So we can start
+	; by handling the data at the cursor position.
+	clr	,y		; We need to calculate the column number
+	bita	#%11110000	; Bit # & 0b100?
+	beq	>		; No, continue on
+	inc	,y		; Yes, set the bit
+!	lsl	,y		; Next bit, please
+	bita	#%11001100	; Bit # & 0b010?
+	beq	>		; No, continue on
+	inc	,y		; Yes, set the bit
+!	lsl	,y		; Next bit, please
+	bita	#%10101010	; Bit # & 0b001?
+	beq	rowlp		; No, continue on
+	inc	,y		; Yes, set the bit
+rowlp	lsrb			; Push off the zeroth bit
+	bcc	nextrow		; If it's zero, skip to the next row
+	leay	1,y		; If not, we've got the value in y.
+	pshs	d
+	lbsr	chradj		; Adjust the character based upon matrix pos'n
+	puls	d
+	tstb			; and check to see if we have more characters.
+	beq	colend		; We don't, so end the column.
+	pshs	a		; We do, so we need to copy over the row value
+	lda	-1,y		; from our previous character in order to allow
+	anda	#$f8		; the row calculation to continue seamlessly.
+	sta	,y
+	puls	a
+nextrow	pshs	b
+	ldb	#$08		; Add 8 to the value at the cursor position
+	addb	,y
+	stb	,y
+	puls	b
+	bra	rowlp		; And continue with the row loop
+colend	coma
+	pshs	d,x
+	bsr	scrlchk		; Check if we need to scroll
+	puls	d,x
+	sty	curcrsr		; Update the cursor position
+pollfin	puls	b,cc		; get the poll value back
+	stb	,x+		; and save it in the poll buffer
+	rora			; Move to the next column
+	bcs	polllp		; A clear carry means we're done
+	lbsr	shwcrsr		; show the cursor
+	lbra	mainlp
+
+	; Process an enter, clear, or break
+	; Clobbers D
+	; Expects the current cursor location in Y
+	; Returns the new current cursor location in Y
+procecb	bita	#$01		; Is this an enter?
+	beq	>		; No, check for clear.
+	sty	prtcrsr		; Yes, put the output cursor at the current
+	pshs	x,y		; cursor location, and process the line that
+	jsr	procln		; was just entered.
+	puls	x,y
+	ldb	#$20		; Clear the screen location at the current
+	stb	,y		; cursor location
+	tfr	y,d		; Get the current cursor location
+	andb	#$e0		; Set it to the beginning of the line
+	addd	#$20		; and move it to the next line.
+	std	curcrsr		; Make this the current position and
+	std	prvcrsr		; the start of entry.
+	tfr	d,y		; Use the new position.
+	rts
+!	bita	#$02		; Is this a clear key?
+	beq	1f		; No, it must be a break.
+	ldy	#scrtop		; Point to the top of the screen
+	sty	curcrsr		; Make this the current position and
+	sty	prvcrsr		; the start of entry.
+	ldd	#$2020
+!	std	,y++
+	cmpy	#scrbot
+	blo	<
+	ldy	#scrtop
+1	rts			; Right now, break doesn't do anything.
+
+	; Handle any need to scroll
+	; Clobbers D, X
+	; Expects the current cursor location in Y
+	; Returns the new current cursor location in Y
+scrlchk	cmpy	#scrbot		; Is the cursor off the screen?
+	blo	2f		; No, we don't need to scroll.
+	ldx	#scrtop+$20	; Yes; Set X to the second line
+!	cmpx	#scrbot+$20	; Have we reached the end?
+	bge	1f		; Yes, clean up.
+	ldd	,x		; No, grab the next pair of characters.
+	std	-$20,x		; and move them one line up.
+	leax	2,x
+	bra	<		; Repeat the loop
+1	leay	-$20,y		; Adjust the cursor position
+	ldd	#$2020
+	tfr	y,x		; Begin clearing out the rest of the line
+!	std	,x++
+	cmpx	#scrbot
+	blo	<
+	ldd	prvcrsr		; Adjust the previous cursor location
+	subd	#$20
+	std	prvcrsr
+2 	rts
+
+	; Adjust the character value based upon matrix position and flags
+	; Clobbers D
+	; Expects the current cursor position in Y
+chradj	lda	-1,y		; Grab the character value under test
+	cmpa	#$2c		; Is this the set of '.-,?'?
+	blo	1f		; No, continue
+	tst	isshft		; Yes, low specials are $20–$2f when unshifted
+	beq	>		; We're unshifted, so skip shifting
+	adda	#$10		; We're shifted, so adjust
+!	bra	chradj_		; and finish up
+1	cmpa	#$21		; Is this '[1-9:;]'?
+	blo	1f		; No, continue
+	tst	isshft		; Yes, high specials are $20-$2f when shifted
+	bne	>		; We're shifted, so we skip unshifting
+	adda	#$10		; We're unshifted, so adjust
+!	bra	chradj_		; and finish up.
+1	cmpa	#$20		; Is this the zero key?
+	bne	>		; No, continue
+	adda	#$10		; Yes adjust to a displayed zero
+	bra	chradj_		; and finish up.
+!	cmpa	#$1f		; Is this the space bar?
+	bne	>		; No, continue
+	inca			; Yes, change the character value to a space.
+	bra	chradj_
+!	cmpa	#$1b		; Is this an arrow key?
+	blo	>		; No, continue.
+	bsr	doarrow		; Yes, handle the arrow key
+	bra	chradj_		; and finish up.
+!	tsta			; Is this an alpha character?
+	beq	chradj_		; No, we're done.
+	tst	isshft		; Is the shift key pressed?
+	beq	chradj_		; No, we're done.
+	adda	#$40		; Yes, make it uppercase.
+chradj_	sta	-1,y		; Store the modified character
+	rts
+
+	; process an arrow key
+	; Clobbers nothing
+	; Expects the current cursor position in Y
+	; Returns the new current cursor position in Y
+doarrow	cmpa	#$1b		; Is this the up arrow?
+	bne	>		; No, continue
+	lda	#$1e		; Yes, have it display the up arrow
+	rts			; and continue.
+!	cmpa	#$1c		; Is this the down arrow?
+	beq	>		; No, but…
+	cmpa	#$1e		; Is this the right arrow?
+	bne	1f		; No, continue
+!	leay	-1,y		; Yes, reset the cursor location and
+	lda	#$20		; clear the screen locations.
+	sta	,y
+	sta	1,y
+	lda	-1,y
+	rts
+1	cmpa	#$1d		; Is this the left arrow?
+	bne	>		; No, continue
+	leay	-1,y		; Yes; at the least we move back one.
+	lda	#$20
+	sta	,y
+	sta	1,y
+	cmpy	prvcrsr		; Are we at the start of input location?
+	ble	>		; Yes, continue
+	lda	#$20		; No, we're doing some clearing.
+	leay	-1,y		; The new cursor position is *behind* the cur-
+	sta	,y		; rent character position.  Clear it.
+!	lda	-1,y		; Make sure we restore the character
+	rts
+
+	; Displays the current cursor shape in the cursor loop
+	; Clobbers nothing
+	; Expects the current cursor location in Y
+shwcrsr	ldy	curcrsr
+	lda	#$03		; Four frame delay for cursor shape update
+	inc	crsdly
+	bita	crsdly		; Have we delayed four frames?
+	beq	>		; Yes, update the cursor shape
+	rts			; No, skip all this nonsense.
+!	ldb	,y		; The current cursor character
+	cmpb	#$20		; Is it a blank?
+	bne	>		; Nope, skip ahead
+	ldb	#$82		; Yep, initialize
+	stb	,y		; and save the value.
+	rts
+!	lda	,y		; We need to split color and character, so
+	anda	#$f0		; a contains color
+	andb	#$0f		; and b contains shape.
+	tstb			; is it the last shape?
+	bne	1f		; No, we need to loop.
+	adda	#$10		; Next color, please
+	bcc	>		; If carry is set, we wrapped around.
+	adda	#$80		; Get us back into the graphics characters.
+!	ora	#$02		; First shape, please
+	sta	,y		; Set the cursor and
+	rts			; we're done
+1	ldx	#crsrlut	; We'll run through the lookup table.
+!	cmpb	,x+		; Is this the one?
+	bne	<		; Nope, continue until we find it
+	ora	,x		; Found it, set the new shape
+	sta	,y		; Store the cursor color and shape
+	rts			; And we're done
+
+	; Process a line for tokens.
+	; Clobbers D, X, Y
+procln	ldx	prvcrsr
+2	ldy	#tokbuf
+	lda	#$20		; If we encounter a blank, we haven't hit the
+3	cmpx	curcrsr		; Have we hit the cursor location?
+	bne	>		; No, skip forward.
+	rts			; Yes, we're done.
+!	cmpa	,x+		; Are we at the beginning of the token?
+	beq	3b		; No, move forward and continue.
+	leax	-1,x		; Back up one 'cause we overshot
+1	ldb	,x+		; Load the character
+	stb	,y+		; Put it in the token buffer
+	cmpy	#tokbuf+$20	; Have we overflowed the token buffer?
+	bne	>		; No, keep going.
+	jmp	[e_tokln]	; Yes, trigger the error.
+	rts			; and go home.
+!	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, hand off to token processing
+	cmpa	,x		; Have we come to a space yet?
+	beq	>		; Yes, hand off to token processing
+	bra	1b		; If we're here, we have more characters
+!	bsr	proctk		; If we're here, we need to process the token
+	bra	2b		; And continue the line scan
+
+	; Dispatch the processing of a token
+proctk	pshs	d,x
+	bsr	srchdct
+	bcc	>		; Carry set means the word wasn't found
+	bsr	procnum		; If it wasn't found, try as a number
+!	puls	d,x
+	rts
+
+	; Process a numeric value.
+	; Expects the end of token location to be in Y
+	; Clobbers D, X
+procnum	clr	,-u		; The parameter stack will be receiving this
+	clr	,-u		; number, so let's set it up
+	ldx	#tokbuf		; We need the first potential digit
+__stdgt	ldb	,x+		; Get the character
+	beq	__pnerr		; If it's zero, that's not a valid digit.
+	cmpb	#$1a		; It could b A-Z
+	bgt	>		; It's not, so skip forward
+	addb	#$09		; It is, so adjust for a radix > 10
+	bra	__dodgt		; And move on to the digit done logic.
+!	cmpb	#$30		; It could be a digit
+	blt	__pnerr		; Nope, so go to the error condition
+	cmpb	#$39		; It could still be a digit
+	bgt	__pnerr		; Nope, so go to the error condition
+	subb	#$30		; Adjust for a decimal digit
+__dodgt	cmpb	radix		; Is this a valid digit?
+	bgt	__pnerr		; Nope, go to the error condition
+	clra	
+	pshs	d		; Save the digit value
+	lda	radix		; get the radix
+	ldb	1,u		; get the lsb of the current number
+	mul			; radix shift left the lsb
+	pshs	d		; We'll need this in a bit
+	lda	radix
+	ldb	,u		; get the msb of the current number
+	mul			; radix shift left the msb
+	tsta			; Did we overflow?
+	bne	__pnerr		; Yes, jump to the error handler
+	exg	b,a		; Bump the resultant into the MSB
+	addd	,s++		; Add the shifted MSB and LSB
+	addd	,s++		; Add the digit we just had
+	std	,u		; Store the number on the parameter stack
+	pshs	y
+	cmpx	,s++		; Did we just finish the number?
+	blt	__stdgt		; No, get the next digit
+	bra	__pndne		; And finish up.
+__pnerr	jmp	[e_toknf]	; An invalid number means the token wasn't found
+__pndne	ldx	prtcrsr
+	lda	#$20
+	sta	,x+
+	ldd	#$4f4b
+	std	,x++
+	rts
+
+	; Search the dictionary for a word.
+	; Expects the end of token location to be in Y
+	; Clobbers D, X
+srchdct	ldx	dicttop		; Get the first dictionary item
+1	tfr	y,d		; Get the end of token location
+	subd	#tokbuf		; Get the token length
+	pshs	b		; We'll need this for comparison
+	ldb	2,x		; Grab the name field header byte
+	andb	#$0f		; Mask off so we only have the length
+	cmpb	,s+		; Compare B to the token length
+	bne	2f		; Lengths don't match, move to the next one
+	lda	#$0		; Lengths match, let's check the word name
+	adda	#$3		; We need A as an offset to the word name
+	pshs	y		; Save the end of token location
+	ldy	#tokbuf		; Set y to the start of the token
+!	ldb	,y+		; Get the character to compare
+	cmpb	a,x		; Check if the character matches.
+	beq	3f		; It is, so continue on.
+	puls	y		; It isn't, so we bail out
+	bra	2f		; and move on to the next word.
+3	inca			; Increment our position offset
+	cmpy	,s		; Are we at the end of the token?
+	bne	<		; No, so loop back
+	; If we're here, we've found the word.  Since we've already saved Y,
+	; we will also save X and D here so they're freely available for the
+	; word we're calling.
+	pshs	x,d
+	jsr	a,x		; So head off to the word code itself.
+!	ldx	prtcrsr
+	lda	#$20		; Print the OK Message
+	sta	,x+
+	ldd	#$4f4b
+	std	,x++
+	puls	d,x,y		; Restore word-clobb'd regs and end of token loc
+	andcc	#$f0		; Clear any error conditions,
+	rts			; And go home.
+2	ldx	,x		; Get the next word location
+	beq	>		; It's null, so we didn't find it
+	bra	1b		; We have an address, so look at the next one
+!	orcc	#$01		; Exit with carry set, indicating not found
+	rts
+
+	; Performs a newline on screen and checks for scroll.
+	; Expects the current cursor position in Y
+	; Clobbers D
+___crlf	tfr	y,d
+	andb	#$e0
+	addd	#$20
+	tfr	d,y
+	lbsr	scrlchk		; Check for scroll
+	rts
+
+	include "errhndlrs.6809"
+
+end	bra	end
+
+	org	$B000
+	include	"dict.6809"
+
+	org	$bffa
+	fdb	erhndlr
+	fdb	#$0000
+	fdb	start

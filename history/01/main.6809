@@ -1,0 +1,78 @@
+        org     $a000
+
+hello   fcb     "HELLO, WORLD!",0
+
+start   lda     <$ff
+        tfr     a,dp
+
+        ; Clear out PIA control registers
+        clr     <$01
+        clr     <$03
+        clr     <$21
+        clr     <$23
+        ; Set PIA I/O directions
+        clr     <$00
+        lda     #$ff
+        sta     <$02
+        deca
+        sta     <$20
+        lda     #$fa
+        sta     <$22
+        ; Set PIA control registers for operation
+        lda     #$34
+        sta     <$01
+        sta     <$03
+        sta     <$21
+        lda     #$3c
+        sta     <$23
+                                
+        ; Set up the SAM
+        ldx     #$FFC0
+        clra
+        ; ; Set display mode control to text/semi4
+        sta ,x++
+        sta ,x++
+        sta ,x++
+        ; ; Set video memory offset
+        sta ,x++
+        leax 1,x
+        sta ,x+
+        sta ,x++
+        sta ,x++
+        sta ,x++
+        sta ,x++
+        ; ; Page 1, set to 0 by definition
+        sta ,x++
+        ; ; CPU rate
+        sta ,x++
+        sta ,x++
+        ; ; Memory size
+        sta ,x++
+        leax 1,x
+        sta ,x+
+        ; ; Map type, set to 0 by definition
+        sta ,x
+
+        ; Set the VDG operation bits
+        lda     #$08
+        sta     <$22
+
+        lda     #$20
+        ldx     #$0400
+cls     sta     ,x+
+        cmpx    #$0600
+        bls     cls
+
+        ldy     #hello
+        ldx     #$0400
+msg     lda     ,y+
+        beq     end
+        suba    #$40
+        sta     ,x+
+        bra     msg
+
+end     bra     end
+
+
+        org     $bffe
+        fdb     start
