@@ -1,5 +1,5 @@
 	; Error vector table $0100–$01ff
-	; Each entrey in this table will contain the address for the error han-
+	; Each entry in this table will contain the address for the error han-
 	;   dling code used for a given error
 	org	$0100
 e_table
@@ -11,6 +11,7 @@ e_div0	rmb	2		; Divide by zero
 e_mulof	rmb	2		; Multiplicative overflow
 e_prnge	rmb	2		; Parameter out of range
 e_nptbl	rmb	2		; Unprintable character
+e_mttok	rmb	2		; Empty token stream
 	
 	; System variables
 	org	$0200
@@ -24,6 +25,8 @@ tokbuf	rmb	$20		; The token processing buffer
 eotbuf
 dicttop	rmb	2		; The top of the dictionary
 radix	rmb	1		; The current system radix
+dsptr	rmb	2		; The data space pointer
+tscrsr	rmb	2		; The token stream cursor
 
 	org	$a000
 	; System constants
@@ -31,6 +34,7 @@ sysstk	equ	$0100
 prmstk	equ	$8000
 scrtop	equ	$0400
 scrbot	equ	$0600
+dsstrt	equ	$0620
 crsrlut	fcb	$2,$a,$e,$f,$d,$5,$1,$0
 
 	; Operating system entry point
@@ -56,6 +60,8 @@ start	lda	#$ff
 	std	,x++
 	ldd	#_enptbl
 	std	,x++
+	ldd	#_emttok
+	std	,x++
 	; Initialize the variable area
 	ldx	#kpbuf		; Clear the keypress buffer
 !	clr	,x
@@ -69,6 +75,8 @@ start	lda	#$ff
 	std	dicttop
 	lda	#$0a		; The initial radix for the system
 	sta	radix
+	ldd	#dsstrt		; The start of data space
+	std	dsptr
 
 	; Clear out PIA control registers
 	clr	<$01
@@ -400,11 +408,13 @@ procln	ldx	prvcrsr
 	bra	2b		; And continue the line scan
 
 	; Dispatch the processing of a token
-proctk	pshs	d,x
+proctk	pshs	d
+	stx	tscrsr		; Save the token stream cursor value
 	bsr	srchdct
 	bcc	>		; Carry set means the word wasn't found
 	bsr	procnum		; If it wasn't found, try as a number
-!	puls	d,x
+!	puls	d
+	ldx	tscrsr		; Restore the token stream cursor value
 	rts
 
 	; Process a numeric value.
@@ -504,6 +514,14 @@ ___crlf	tfr	y,d
 	tfr	d,y
 	lbsr	scrlchk		; Check for scroll
 	rts
+
+	; Checks to see if the parameter stack is empty.  Throws `e_stkdp` if
+	; that's the case.
+___usne	cmpu	#prmstk		; Are we at the BOS?
+	blo	>		; No, skip the error condition
+	ldx	#e_stkdp	; Yes, signal a stack depth error.
+	swi
+!	rts
 
 	include "errhndlrs.6809"
 

@@ -11,10 +11,10 @@ main.rom: main.6809 dict.6809 errhndlrs.6809
 assemble: main.rom
 
 run: assemble
-	mame coco -debug -skip_gameinfo -window -nomaximize -resolution0 640x480 -bios b10 -ext ""
+	mame coco -debug -skip_gameinfo -window -nomaximize -resolution0 800x600 -bios b10 -ext ""
 
 nodebug: assemble
-	mame coco -skip_gameinfo -nomouse -window -nomaximize -resolution0 640x480 -bios b10 -ext ""
+	mame coco -skip_gameinfo -nomouse -window -nomaximize -resolution0 800x600 -bios b10 -ext ""
 
 incver:
 	mkdir history/$(NEXT_VER)

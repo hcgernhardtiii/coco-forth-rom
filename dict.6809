@@ -1,13 +1,151 @@
 _dicttop
 
+_constant
+	fdb	_variable
+	fcb	$c8
+	fcv	"constant"
+__constant
+	lbsr	___usne
+	lbsr	__creat
+	ldd	dsptr
+	subd	#$5
+	tfr	d,x
+	pulu	d
+	std	,x
+	rts
+
+_variable
+	fdb	_create
+	fcb	$c8
+	fcv	"variable"
+__variable
+	bsr	__creat
+	ldd	#$2
+	addd	dsptr
+	std	dsptr
+	rts
+
+_create	fdb	_allot
+	fcb	$c6
+	fcv	"create"
+__creat	ldx	tscrsr		; Get the current token stream pos'n
+	ldy	#tokbuf		; Get the token buffer
+	lda	#$20		; Skip any leading spaces
+1	cmpx	curcrsr		; Are we at the end of the input line?
+	bne	>		; No, let's keep going.
+	ldx	#e_mttok	; Yes, so emit the error condition.
+	swi
+!	cmpa	,x+		; Are we at the beginning of a token?
+	beq	1b		; No, keep trying.
+	leax	-1,x		; Back up one 'cause we've overshot
+1	ldb	,x+		; Load the character
+	stb	,y+		; Put it in the token buffer
+	cmpy	#tokbuf+$10	; Have we overflowed the token buffer?
+	bne	>		; No, keep going.
+	ldx	#e_tokln	; Yes, trigger the error.
+	swi
+!	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, create the word
+	cmpa	,x		; Have we come to a space yet?
+	beq	>		; Yes, create the word
+	bra	1b		; If we're here, we have more characters
+!	stx	tscrsr		; If we're here, we're creating the word
+	; Store the location of the most recent dictionary word
+	ldx	dsptr		; dsptr will become our new dicttop, so
+	ldd	dicttop		; we store dicttop in the new word's
+	std	,x		; link field area and dsptr becomes
+	stx	dicttop		; our new dicttop.
+	; Calculate and store the name field preamble
+	leax	2,x		; Advance to the name field.
+	tfr	y,d		; Get the end of token location
+	subd	#tokbuf		; and determine the length of the token.
+	andb	#$0f		; mask off the word name length,
+	orb	#$c0		; mark the word as an immediate word,
+	stb	,x+		; store the name field preamble,
+	andb	#$0f		; restore only a length,
+	pshs	b		; save it for later,
+	decb			; and adjust for offset calculation.
+	; Store the new word's name
+	ldy	#tokbuf		; Set Y to the beginning of the token buffer
+!	lda	b,y		; Get the word name character
+	sta	b,x		; and store it in the name field.
+	decb			; Let's get the next character
+	bpl	<		; Unless we've come to the end.
+	; Store the word's code
+	puls	b		; Get the word name length back and
+	leax	b,x		; get X pointing to the code field
+	ldb	#$cc		; LDD immediate opcode
+	stb	,x+		; That's the first byte of our word code
+	tfr	x,d		; We'll be needing the location where the
+	addd	#$5		; data pointer *will* be after the code field.
+	std	,x++		; Store the parameter of LDD immediate
+	ldd	#$3606		; PSHU D opcode
+	std	,x++		; Store it
+	ldb	#$39		; rts opcode
+	stb	,x+		; Store it
+	stx	dsptr		; Update the data space pointer
+	rts
+
+_allot	fdb	_cellp
+	fcb	$c5
+	fcv	"allot"
+__allot	lbsr	___usne
+	pulu	d
+	addd	dsptr
+	std	dsptr
+	rts
+	
+_cellp	fdb	_cells
+	fcb	$c5
+	fcv	"cell",$2b
+__cellp	lbsr	___usne
+	ldd	,u		
+	addd	#2		; The cell size is two bytes, after all
+	std	,u		; update the value
+	rts
+
+_cells	fdb	_fetch
+	fcb	$c5
+	fcv	"cells"
+__cells	lbsr	___usne
+	lsl	1,u		; multiply the low byte by 2
+	rol	,u		; multiply the high byte by 2 carrying in
+	rts
+
+_fetch	fdb	_store
+	fcb	$c1
+	fcb	$00		;'@'
+__fetch	lbsr	___usne
+	ldd	[,u]		; Grab the value from memory
+	std	,u		; Replace the address with the value
+	rts
+
+_store	fdb	_here
+	fcb	$c1
+	fcb	$21		;'!'
+__store	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have enough on the stack?
+	bhs	>		; Yes, keep going
+	ldx	#e_stkdp	; Yes, signal a stack depth error.
+	swi
+!	ldd	2,u		; Grab the value we're going to store
+	std	[,u]		; Store it in the provided location
+	leau	4,u		; dump the parameter stack
+	rts
+
+_here	fdb	_dup
+	fcb	$c4
+	fcv	"here"
+__here	ldd	dsptr		; Get the current data space pointer
+	pshu	d		; and put it on the parameter stack.
+	rts
+
 _dup	fdb	_dropn
 	fcb	$c3
 	fcb	$04,$15,$10	; 'DUP'
-__dup	cmpu	#prmstk		; Are we at the BOS?
-	blo	>		; No, skip the error condition
-	ldx	#e_stkdp	; Yes, signal a stack depth error.
-	swi
-!	ldd	,u		; Grab the TOS value
+__dup	lbsr	___usne
+	ldd	,u		; Grab the TOS value
 	pshu	d		; and duplicate it
 	rts
 
@@ -152,21 +290,15 @@ __sub	lbsr	__depth
 _drop	fdb	_base
 	fcb	$c4
 	fcb	$04,$12,$0f,$10
-__drop	cmpu	#prmstk		; Are we at the BOS?
-	blo	>		; No, skip the error condition
-	ldx	#e_stkdp	; Yes, Signal a stack depth error.
-	swi
-!	leau	2,u		; Drop the stack
+__drop	lbsr	___usne
+	leau	2,u		; Drop the stack
 	rts
 
 _base	fdb	_dot
 	fcb	$c4
 	fcb	$02,$01,$13,$05
-__base	cmpu	#prmstk		; Are we at the BOS?
-	blo	>		; No, skip the error condition
-	ldx	#e_stkdp	; Yes, Signal a stack depth error.
-	swi
-!	pulu	d
+__base	lbsr	___usne
+	pulu	d
 	cmpb	#02		; Are we asking for a radix less than 2?
 	bhs	>		; No, check for upper bound
 	ldx	#e_prnge	; Yes, emit the range error.
