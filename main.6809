@@ -30,11 +30,13 @@ tscrsr	rmb	2		; The token stream cursor
 
 	org	$a000
 	; System constants
-sysstk	equ	$0100
-prmstk	equ	$8000
-scrtop	equ	$0400
-scrbot	equ	$0600
-dsstrt	equ	$0620
+sysstk	equ	$0100		; Where the bottom of the system stack lives
+wrdbuf	equ	$0300		; Where the word buffer lives (1 page)
+scrtop	equ	$0400		; Where the top of the text screen lives
+scrbot	equ	$0600		; The bottom of the text screen and the start
+				; of the text scroll buffer
+dsstrt	equ	$0620		; Where the data space begins
+prmstk	equ	$8000		; Where the bottom of the parameter stack lives
 crsrlut	fcb	$2,$a,$e,$f,$d,$5,$1,$0
 
 	; Operating system entry point
@@ -522,6 +524,64 @@ ___usne	cmpu	#prmstk		; Are we at the BOS?
 	ldx	#e_stkdp	; Yes, signal a stack depth error.
 	swi
 !	rts
+
+	; Converts an ASCII character to its VDGSCII equivalent, based upon
+	; the original VDG (*not* the T1) character set.
+	; Expects the character to be translated in B
+___atov	cmpb	#$20		; Are we in the unprintables?
+	bhs	>		; No, so keep going.
+	ldb	#$20		; Replace unprintables with a space.
+	bra	9f
+	cmpb	#$40		; Are we in the numbers and such?
+	blo	9f		; Yes, so go ahead and print these.
+	bhi	>		; No, we're in upper case
+	clrb			; It's an '@', so translate
+	bra	9f		; and print.
+!	cmpb	#$5a		; Are we in upper case?
+	bhi	>		; No, skip ahead.
+	bra	9f		; Yes, so no translation is needed.
+!	cmpb	#$5f		; In '[\]^_'?
+	bhi	>		; No, skip ahead.
+	subb	#$40		; Yes, adjust for proper display
+	bra	9f		; and print.
+!	cmpb	#$60		; Is it a back tick?
+	bhi	>		; No, skip ahead
+	ldb	#$67		; Use inverse forward tick
+	bra	9f		; and print.
+!	cmpb	#$7a		; Is it lower case?
+	bhi	>		; No, skip ahead
+	subb	#$60		; Yes, adjust for proper display
+	bra	9f		; and print.
+!	cmpb	#$7d		; In '{|}'?
+	bhi	>		; No, skip ahead
+	subb	#$20		; Yes, sub inverse '[\]'
+	bra	9f		; and print
+!	cmpb	#$7e		; Is it '~'?
+	bhi	>		; No, skip ahead.
+	ldb	#$61		; Replace with inverse '!'
+	bra	9f		; and print.
+!	cmpb	#$80		; Are we in graphics characters?
+	bhs	9f		; Yes, go ahead and print.
+	ldb	#$20		; No, replace with a space.
+9	rts			; No, so quit with no printing
+
+	; Translates a VDGSCII character into its ASCII equivalent
+	; Expects the character to be translated in A
+___vtoa	tsta			; Is it the at sign?
+	bne	>		; No, keep going.
+	adda	#$40		; Yes, translate
+	bra	2f		; and continue.
+!	cmpa	#$1a		; Is it a lower-case character?
+	bhi	>		; No, keep going.
+	adda	#$60		; Yes, translate
+	bra	2f		; and continue.
+!	cmpa	#$1f		; Is it in "[\]^_"?
+	bhi	2f		; No, keep going.
+	adda	#$40		; Yes, translate and continue.	
+	; Anything bigger than this either doesn't need to be translated or
+	; can't be typed based upon what we've done so far.
+2	rts
+
 
 	include "errhndlrs.6809"
 

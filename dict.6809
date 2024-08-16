@@ -1,5 +1,176 @@
 _dicttop
 
+_move	fdb	_char
+	fcb	$c4
+	fcv	"move"
+__move	lbsr	__depth
+	pulu	d
+	cmpb	#$03		; We need three items
+	bhs	>
+	ldx	#e_stkdp	; If we don't have 'em, error out.
+	swi
+	; 0,U(D): the byte count to be transferred
+	; 2,U(X): the destination address
+	; 4,U(Y): the source address
+!	pulu	d,x,y		; Get our parameters
+1	tstb			; Has the count LSB hit zero?
+	bne	>		; No, skip over this next bit.
+	tsta			; Has the count MSB hit zero?
+	beq	2f		; Yes, we're done.
+	deca			; No, so roll count MSB back one
+!	decb			; Roll count LSB back one
+	pshs	b		; Move the data over
+	ldb	,y+
+	stb	,x+
+	puls	b
+	bra	1b		; Get the next byte
+2	rts
+
+
+_char	fdb	_twodup
+	fcb	$c4
+	fcv	"char"
+__char	ldx	tscrsr		; Get the current token stream pos'n
+	ldy	#tokbuf		; Get the token buffer
+	lda	#$20		; Skip any leading spaces
+1	cmpx	curcrsr		; Are we at the end of the input line?
+	bne	>		; No, let's keep going.
+	ldx	#e_mttok	; Yes, so emit the error condition.
+	swi
+!	cmpa	,x+		; Are we at the beginning of a token?
+	beq	1b		; No, keep trying.
+	leax	-1,x		; Back up one 'cause we've overshot
+1	ldb	,x+		; Load the character
+	stb	,y+		; Put it in the token buffer
+	cmpy	#tokbuf+$10	; Have we overflowed the token buffer?
+	bne	>		; No, keep going.
+	ldx	#e_tokln	; Yes, trigger the error.
+	swi
+!	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, get that first character
+	cmpa	,x		; Have we come to a space yet?
+	beq	>		; Yes, get that first character
+	bra	1b		; If we're here, we have more characters
+!	stx	tscrsr		; If we're here, we're grabbing the character
+	lda	tokbuf		; Get the first character in the token buffer
+	lbsr	___vtoa		; Translate to ASCII
+	exg	b,a
+	clra			; Set it up for the parameter stack
+	pshu	d		; return the ASCII value
+	rts
+
+_twodup	fdb	_type
+	fcb	$c4
+	fcv	$32,"dup"
+__twodup
+	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have less than two parameters?
+	bhs	>		; No, we can keep going
+	ldx	#e_stkdp	; Signal a stack depth error
+	swi
+!	ldd	+2,u
+	pshu	d
+	ldd	2,u
+	pshu	d
+	rts
+
+_type	fdb	_count
+	fcb	$c4
+	fcv	"type"
+__type	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have less than two parameters?
+	bhs	>		; No, we can keep going
+	ldx	#e_stkdp	; Signal a stack depth error
+	swi
+!	ldy	prtcrsr		; Grab our output cursor position
+	ldb	#$20
+	stb	,y+		; Prefix output with a space
+	pulu	x,d		; Grab our character count and data pointer
+	exg	a,b		; We use B for character data
+!	tsta			; Have we hit the end of the string?
+	beq	>		; Yes, we're done.
+	ldb	,x+		; No, so let's get the character,
+	deca			; decrement our counter,
+	lbsr	___atov		; translate the character to VDGSCII,
+	stb	,y+		; and put it on the screen.
+	bra	<		; Next character, please.
+!	sty	prtcrsr		; Update the output cursor location
+	rts			; and go home.
+
+	bra	<		; And loop back.
+!	rts			; We're done, let's go home.
+
+_count	fdb	_word
+	fcb	$c5
+	fcv	"count"
+__count	lbsr	___usne		; Make sure we have something on the stack
+	pulu	x		; Get the counted string address
+	ldb	,x+		; Get the character count and point X to the
+	clra			; beginning of string data.
+	pshu	d,x		; Put the data on the stack
+	rts
+
+_word	fdb	_bl
+	fcb	$c4
+	fcv	"word"
+__word	lbsr	___usne		; Make sure we have something on the stack
+	ldx	tscrsr		
+	leax	1,x		; Consume the token parser's final delimiter
+	ldy	#wrdbuf		; Get the word buffer into Y
+	clr	,y+		; Zero the count byte
+	pulu	d		; Get the delimiter character into B and
+	lbsr	___atov		; translate it to VDGSCII
+1	cmpx	curcrsr		; Are we at the end of the input line?
+	bne	>		; No, let's keep going.
+	ldx	#e_mttok	; Yes, so emit the error condition.
+	swi
+!	cmpb	,x+		; Have we passed opening delimiters?
+	beq	1b		; Nope, so keep trying.
+	leax	-1,x		; Back up one 'cause we've overshot
+1	cmpy	#scrtop		; Have we overflowed the buffer?
+	bne	>		; No, keep going.
+	ldx	#e_tokln	; Yes, trigger the overflow error.
+	swi
+!	lda	,x+		; Load the character
+	lbsr	___vtoa		; translate the character to ASCII
+2	sta	,y+		; Put it in the word buffer
+	inc	wrdbuf		; Increment the character counter
+	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, we're implicitly done.
+	cmpb	,x		; Have we hit the closing delimiter?
+	beq	>		; Yes, we're done.
+	bra	1b		; No, we have more characters, loop back.
+	; If we're here, we're saving the string.
+!	leax	1,x		; Consume the ending delimiter
+	stx	tscrsr		; and save the token stream location
+	ldd	#wrdbuf		; Return the word buffer location
+	pshu	d		; in the parameter stack
+	rts			; and go home.
+
+_bl	fdb	_emit
+	fcb	$c2
+	fcv	"bl"
+__bl	ldd	#$20
+	pshu	d
+	rts
+
+_emit	; Don't forget to add in HT, CR, and LF
+	fdb	_constant
+	fcb	$c4
+	fcv	"emit"
+__emit	lbsr	___usne		; Make sure the stack isn't empty
+	pulu	d
+	ldy	prtcrsr
+	lbsr	___atov
+8	lda	#$20		; Put a space in front of the output
+	sta	,y+
+	stb	,y+
+	sty	prtcrsr
+9	rts
+
+
 _constant
 	fdb	_variable
 	fcb	$c8
