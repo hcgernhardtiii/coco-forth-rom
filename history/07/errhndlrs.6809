@@ -1,0 +1,73 @@
+	; Error handler entry point
+	; Expects the error vector table cell address in X
+erhndlr	jmp	[,x]
+
+	; This is the error printing routine.
+	; Expects the address of the zero-terminated string in X
+eprntr	ldy	curcrsr
+	ldb	#$20
+	stb	,y		; Clear the vestigal cursor character
+	pshs	x		; and move to the next line
+	lbsr	___crlf
+	puls	x
+!	ldb	,x+		; Get the character
+	beq	>		; If we've hit the zero, we're done
+	stb	,y+		; Print the character and
+	pshs	x		; check for a scroll condition.
+	lbsr	scrlchk
+	puls	x
+	bra	<		; and go on to the next one.
+	pshs	x
+!	lbsr	___crlf
+	puls	x
+	ldu	#prmstk		; Dump the parameter stack
+	lds	#sysstk		; Dump the system stack
+	ldx	#kpbuf		; Clear any pending keypresses
+!	clr	,x
+	com	,x+
+	cmpx	#prvcrsr
+	bne	<
+	sty	curcrsr		; Store the new cursor location
+	sty	prvcrsr
+	lbra	mainlp
+
+_mdfalt	fcv	"That",$20,"didn",$27,"t",$20"work",$2e,0
+_edfalt	ldx	#_mdfalt
+	lbra	eprntr
+
+_mtoknf	fcv	"I",$20,"don",$27,"t",$20,"know",$20,"what",$20,"that",$20
+	fcv	"means",$2e,0
+_etoknf	ldx	#_mtoknf
+	lbra	eprntr	
+
+_mtokln	fcv	"Sorry",$2c,$20,"I",$20,"got",$20,"bored",$2e,0
+_etokln	ldx	#_mtokln
+	lbra	eprntr
+
+_mstkdp	fcv	"What",$2c,$20,"nothing",$20,"else",$20,"for",$20,"me",$3f,0
+_estkdp	ldx	#_mstkdp
+	lbra	eprntr
+
+_mdiv0	fcv	"I",$20,"don",$27,"t",$20,"like",$20,"infinities",$2c,$20
+	fcv	"y",$27,"know",$2e,0
+_ediv0	ldx	#_mdiv0
+	lbra	eprntr	
+	
+_mmulof	fcv	"That",$20,"got",$20,"too",$20,"big",$20,"too",$20,"quick",$2e,0
+_emulof	ldx	#_mmulof
+	lbra	eprntr
+
+_mprnge	fcv	"I",$20,"can",$27,"t",$20,"deal",$20,"with",$20,"that",$20
+	fcv	"number",$2e,0
+_eprnge	ldx	#_mprnge
+	lbra	eprntr
+
+_mnptbl	fcv	"I",$20,"must",$27,"nt",$20,"speak",$20,"of",$20,"such",$20
+	fcv	"things",$2e,0
+_enptbl	ldx	#_mnptbl
+	lbra	eprntr
+
+_mmttok	fcv	"There",$27,"s",$20,"nuthin",$27,$20,"left",$20
+        fcv	"to",$20,"read",0
+_emttok	ldx	#_mmttok
+	lbra	eprntr

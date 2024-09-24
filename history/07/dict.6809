@@ -1,0 +1,608 @@
+_dicttop
+
+_move	fdb	_char
+	fcb	$c4
+	fcv	"move"
+__move	lbsr	__depth
+	pulu	d
+	cmpb	#$03		; We need three items
+	bhs	>
+	ldx	#e_stkdp	; If we don't have 'em, error out.
+	swi
+	; 0,U(D): the byte count to be transferred
+	; 2,U(X): the destination address
+	; 4,U(Y): the source address
+!	pulu	d,x,y		; Get our parameters
+1	tstb			; Has the count LSB hit zero?
+	bne	>		; No, skip over this next bit.
+	tsta			; Has the count MSB hit zero?
+	beq	2f		; Yes, we're done.
+	deca			; No, so roll count MSB back one
+!	decb			; Roll count LSB back one
+	pshs	b		; Move the data over
+	ldb	,y+
+	stb	,x+
+	puls	b
+	bra	1b		; Get the next byte
+2	rts
+
+
+_char	fdb	_twodup
+	fcb	$c4
+	fcv	"char"
+__char	ldx	tscrsr		; Get the current token stream pos'n
+	ldy	#tokbuf		; Get the token buffer
+	lda	#$20		; Skip any leading spaces
+1	cmpx	curcrsr		; Are we at the end of the input line?
+	bne	>		; No, let's keep going.
+	ldx	#e_mttok	; Yes, so emit the error condition.
+	swi
+!	cmpa	,x+		; Are we at the beginning of a token?
+	beq	1b		; No, keep trying.
+	leax	-1,x		; Back up one 'cause we've overshot
+1	ldb	,x+		; Load the character
+	stb	,y+		; Put it in the token buffer
+	cmpy	#tokbuf+$10	; Have we overflowed the token buffer?
+	bne	>		; No, keep going.
+	ldx	#e_tokln	; Yes, trigger the error.
+	swi
+!	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, get that first character
+	cmpa	,x		; Have we come to a space yet?
+	beq	>		; Yes, get that first character
+	bra	1b		; If we're here, we have more characters
+!	stx	tscrsr		; If we're here, we're grabbing the character
+	lda	tokbuf		; Get the first character in the token buffer
+	lbsr	___vtoa		; Translate to ASCII
+	exg	b,a
+	clra			; Set it up for the parameter stack
+	pshu	d		; return the ASCII value
+	rts
+
+_twodup	fdb	_type
+	fcb	$c4
+	fcv	$32,"dup"
+__twodup
+	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have less than two parameters?
+	bhs	>		; No, we can keep going
+	ldx	#e_stkdp	; Signal a stack depth error
+	swi
+!	ldd	+2,u
+	pshu	d
+	ldd	2,u
+	pshu	d
+	rts
+
+_type	fdb	_count
+	fcb	$c4
+	fcv	"type"
+__type	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have less than two parameters?
+	bhs	>		; No, we can keep going
+	ldx	#e_stkdp	; Signal a stack depth error
+	swi
+!	ldy	prtcrsr		; Grab our output cursor position
+	ldb	#$20
+	stb	,y+		; Prefix output with a space
+	pulu	x,d		; Grab our character count and data pointer
+	exg	a,b		; We use B for character data
+!	tsta			; Have we hit the end of the string?
+	beq	>		; Yes, we're done.
+	ldb	,x+		; No, so let's get the character,
+	deca			; decrement our counter,
+	lbsr	___atov		; translate the character to VDGSCII,
+	stb	,y+		; and put it on the screen.
+	bra	<		; Next character, please.
+!	sty	prtcrsr		; Update the output cursor location
+	rts			; and go home.
+
+	bra	<		; And loop back.
+!	rts			; We're done, let's go home.
+
+_count	fdb	_word
+	fcb	$c5
+	fcv	"count"
+__count	lbsr	___usne		; Make sure we have something on the stack
+	pulu	x		; Get the counted string address
+	ldb	,x+		; Get the character count and point X to the
+	clra			; beginning of string data.
+	pshu	d,x		; Put the data on the stack
+	rts
+
+_word	fdb	_bl
+	fcb	$c4
+	fcv	"word"
+__word	lbsr	___usne		; Make sure we have something on the stack
+	ldx	tscrsr		
+	leax	1,x		; Consume the token parser's final delimiter
+	ldy	#wrdbuf		; Get the word buffer into Y
+	clr	,y+		; Zero the count byte
+	pulu	d		; Get the delimiter character into B and
+	lbsr	___atov		; translate it to VDGSCII
+1	cmpx	curcrsr		; Are we at the end of the input line?
+	bne	>		; No, let's keep going.
+	ldx	#e_mttok	; Yes, so emit the error condition.
+	swi
+!	cmpb	,x+		; Have we passed opening delimiters?
+	beq	1b		; Nope, so keep trying.
+	leax	-1,x		; Back up one 'cause we've overshot
+1	cmpy	#scrtop		; Have we overflowed the buffer?
+	bne	>		; No, keep going.
+	ldx	#e_tokln	; Yes, trigger the overflow error.
+	swi
+!	lda	,x+		; Load the character
+	lbsr	___vtoa		; translate the character to ASCII
+2	sta	,y+		; Put it in the word buffer
+	inc	wrdbuf		; Increment the character counter
+	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, we're implicitly done.
+	cmpb	,x		; Have we hit the closing delimiter?
+	beq	>		; Yes, we're done.
+	bra	1b		; No, we have more characters, loop back.
+	; If we're here, we're saving the string.
+!	leax	1,x		; Consume the ending delimiter
+	stx	tscrsr		; and save the token stream location
+	ldd	#wrdbuf		; Return the word buffer location
+	pshu	d		; in the parameter stack
+	rts			; and go home.
+
+_bl	fdb	_emit
+	fcb	$c2
+	fcv	"bl"
+__bl	ldd	#$20
+	pshu	d
+	rts
+
+_emit	; Don't forget to add in HT, CR, and LF
+	fdb	_constant
+	fcb	$c4
+	fcv	"emit"
+__emit	lbsr	___usne		; Make sure the stack isn't empty
+	pulu	d
+	ldy	prtcrsr
+	lbsr	___atov
+8	lda	#$20		; Put a space in front of the output
+	sta	,y+
+	stb	,y+
+	sty	prtcrsr
+9	rts
+
+
+_constant
+	fdb	_variable
+	fcb	$c8
+	fcv	"constant"
+__constant
+	lbsr	___usne
+	lbsr	__creat
+	ldd	dsptr
+	subd	#$5
+	tfr	d,x
+	pulu	d
+	std	,x
+	rts
+
+_variable
+	fdb	_create
+	fcb	$c8
+	fcv	"variable"
+__variable
+	bsr	__creat
+	ldd	#$2
+	addd	dsptr
+	std	dsptr
+	rts
+
+_create	fdb	_allot
+	fcb	$c6
+	fcv	"create"
+__creat	ldx	tscrsr		; Get the current token stream pos'n
+	ldy	#tokbuf		; Get the token buffer
+	lda	#$20		; Skip any leading spaces
+1	cmpx	curcrsr		; Are we at the end of the input line?
+	bne	>		; No, let's keep going.
+	ldx	#e_mttok	; Yes, so emit the error condition.
+	swi
+!	cmpa	,x+		; Are we at the beginning of a token?
+	beq	1b		; No, keep trying.
+	leax	-1,x		; Back up one 'cause we've overshot
+1	ldb	,x+		; Load the character
+	stb	,y+		; Put it in the token buffer
+	cmpy	#tokbuf+$10	; Have we overflowed the token buffer?
+	bne	>		; No, keep going.
+	ldx	#e_tokln	; Yes, trigger the error.
+	swi
+!	cmpx	curcrsr		; Are we at the current cursor location?
+	beq	>		; Yes, create the word
+	cmpa	,x		; Have we come to a space yet?
+	beq	>		; Yes, create the word
+	bra	1b		; If we're here, we have more characters
+!	stx	tscrsr		; If we're here, we're creating the word
+	; Store the location of the most recent dictionary word
+	ldx	dsptr		; dsptr will become our new dicttop, so
+	ldd	dicttop		; we store dicttop in the new word's
+	std	,x		; link field area and dsptr becomes
+	stx	dicttop		; our new dicttop.
+	; Calculate and store the name field preamble
+	leax	2,x		; Advance to the name field.
+	tfr	y,d		; Get the end of token location
+	subd	#tokbuf		; and determine the length of the token.
+	andb	#$0f		; mask off the word name length,
+	orb	#$c0		; mark the word as an immediate word,
+	stb	,x+		; store the name field preamble,
+	andb	#$0f		; restore only a length,
+	pshs	b		; save it for later,
+	decb			; and adjust for offset calculation.
+	; Store the new word's name
+	ldy	#tokbuf		; Set Y to the beginning of the token buffer
+!	lda	b,y		; Get the word name character
+	sta	b,x		; and store it in the name field.
+	decb			; Let's get the next character
+	bpl	<		; Unless we've come to the end.
+	; Store the word's code
+	puls	b		; Get the word name length back and
+	leax	b,x		; get X pointing to the code field
+	ldb	#$cc		; LDD immediate opcode
+	stb	,x+		; That's the first byte of our word code
+	tfr	x,d		; We'll be needing the location where the
+	addd	#$5		; data pointer *will* be after the code field.
+	std	,x++		; Store the parameter of LDD immediate
+	ldd	#$3606		; PSHU D opcode
+	std	,x++		; Store it
+	ldb	#$39		; rts opcode
+	stb	,x+		; Store it
+	stx	dsptr		; Update the data space pointer
+	rts
+
+_allot	fdb	_cellp
+	fcb	$c5
+	fcv	"allot"
+__allot	lbsr	___usne
+	pulu	d
+	addd	dsptr
+	std	dsptr
+	rts
+	
+_cellp	fdb	_cells
+	fcb	$c5
+	fcv	"cell",$2b
+__cellp	lbsr	___usne
+	ldd	,u		
+	addd	#2		; The cell size is two bytes, after all
+	std	,u		; update the value
+	rts
+
+_cells	fdb	_fetch
+	fcb	$c5
+	fcv	"cells"
+__cells	lbsr	___usne
+	lsl	1,u		; multiply the low byte by 2
+	rol	,u		; multiply the high byte by 2 carrying in
+	rts
+
+_fetch	fdb	_store
+	fcb	$c1
+	fcb	$00		;'@'
+__fetch	lbsr	___usne
+	ldd	[,u]		; Grab the value from memory
+	std	,u		; Replace the address with the value
+	rts
+
+_store	fdb	_here
+	fcb	$c1
+	fcb	$21		;'!'
+__store	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have enough on the stack?
+	bhs	>		; Yes, keep going
+	ldx	#e_stkdp	; Yes, signal a stack depth error.
+	swi
+!	ldd	2,u		; Grab the value we're going to store
+	std	[,u]		; Store it in the provided location
+	leau	4,u		; dump the parameter stack
+	rts
+
+_here	fdb	_dup
+	fcb	$c4
+	fcv	"here"
+__here	ldd	dsptr		; Get the current data space pointer
+	pshu	d		; and put it on the parameter stack.
+	rts
+
+_dup	fdb	_dropn
+	fcb	$c3
+	fcb	$04,$15,$10	; 'DUP'
+__dup	lbsr	___usne
+	ldd	,u		; Grab the TOS value
+	pshu	d		; and duplicate it
+	rts
+
+_dropn	fdb	_mul
+	fcb	$c5
+	fcb	$04,$12,$0f,$10,$0e
+		; 'DROPN'
+__dropn	lbsr	__depth
+	pulu	d		; Grab the current stack depth
+	cmpb	#$02		; Stack depth < 2 is nonsensical
+	blo	1f		; If that's the case, error out
+	subd	#$01		; Adjust for depth of stack excluding parameter
+	cmpd	,u		; Are we asking for more than we have?
+	blo	1f		; Yes, process the error
+	pulu	d		; No, drop the stack
+	leau	d,u
+	leau	d,u
+	bra	2f
+1	ldx	#e_stkdp	; Signal a stack depth error
+	swi
+2	rts			; and go home.
+
+_mul	fdb	_div
+	fcb	$c1
+	fcb	$2a		; '*'
+__mul	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have enough on the stack?
+	bhs	_i_mul		; Yes, keep going
+	ldx	#e_stkdp	; Yes, signal a stack depth error.
+	swi
+_i_mul	tst	,u
+	beq	2f		; If the MSB of the multiplier is 0, we're good
+	tst	2,u
+	bne	1f		; Both MSBs are non-zero.  This *will* overflow.
+2	lda	1,u
+	ldb	3,u
+	mul			; Multiply the LSBs
+	std	-2,s		; And hold the resultant in a tempvar.
+	lda	1,u
+	ldb	2,u
+	mul			; Multiply TOS LSB and NOS MSB
+	tsta			; If the product exceeds $ff it's an overflow
+	bne	1f		; so error out.
+	exg	a,b
+	addd	-2,s		; Add it to the previous partial product
+	std	-2,s		; and save it.
+	lda	,u
+	ldb	3,u
+	mul			; Multiply TOS MSB and NOS LSB
+	tsta			; If the product exceeds $ff it's an overflow
+	bne	1f		; so error out.
+	exg	a,b
+	addd	-2,s		; Add it to the previous partial product,
+	leau	2,u		; pop the parameter stack,
+	std	,u		; save the product,
+	bra	2f		; and go home.
+1	ldx	#e_mulof	; Signal a multiplicative overflow
+	swi
+2	rts
+
+_div	fdb	_swap
+	fcb	$c1
+	fcb	$2f
+__div	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have two parameters?
+	bhs	>		; Yes, continue on.
+	ldx	#e_stkdp	; No, Signal a stack depth error.
+	swi
+!	ldd	,u		; Get our divisor
+	beq	1f		; Signal a divide by zero error
+	clr	-1,s
+	clr	-2,s		; Clear out our quotient tempvar
+	clr	-3,s		; Clear out the tempvar for the shift count
+3	cmpd	2,u		; Is the divisor bigger than the dividend?
+	bhi	2f		; Yes, we head to the actual division bit.
+	lslb
+	rola			; Shift the divisor left one,
+	inc	-3,s		; Increment our shift count,
+	bra	3b		; And keep going.
+2	tst	-3,s		; Have we finished the division process?
+	bne	4f		; No, let's continue the loop.
+	leau	4,u		; Yes, so drop the stack,
+	ldd	-2,s		; load the quotient,
+	pshu	d		; and put it on the parameter stack.
+	bra	5f		; Finish up and go home.
+4	; When we get here, the divisor is already shifted one bit bigger than
+	; the dividend.  Thus, the first right shift is necessary.
+	lsra
+	rorb			; Shift the divisor right one,
+	lsl	-1,s
+	rol	-2,s		; shift the quotient left one,
+	dec	-3,s		; and decrement the shift count.
+	cmpd	2,u		; Is the divisor bigger than our dividend?
+	bhi	2b		; Yes, go to the next digit.
+	std	-5,s		; No, we need to do the subtraction.
+	ldd	2,u
+	subd	-5,s
+	std	2,u
+	ldd	-2,s
+	addd	#1
+	std	-2,s		; Increment our quotient
+	ldd	-5,s		; Get the divisor back
+	bra	2b		; Continue with the loop
+	bra	>
+1	ldx	#e_div0		; Signal a divide by zero error.
+	swi
+5	rts
+
+_swap	fdb	_sub
+	fcb	$c4
+	fcb	$13,$17,$01,$10
+__swap	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have two parameters?
+	bhs	>		; Yes, continue on.
+	ldx	#e_stkdp	; No, Signal a stack depth error.
+	swi
+!	pulu	x,y
+	exg	x,y
+	pshu	x,y
+	rts
+
+_sub	fdb	_drop
+	fcb	$c1
+	fcb	$2d
+__sub	lbsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have two parameters?
+	bhs	>		; Yes, continue on.
+	ldx	#e_stkdp	; No, Signal a stack depth error.
+	swi
+!	pulu	x		; Get the minuend into D and the subtrahend
+	pulu	d		; on the stack
+	pshu	x
+	subb	1,u		; Subtract the LSB
+	sbca	,u		; Subtract the MSB
+	std	,u		; Put the result on the parameter stack
+	rts
+
+_drop	fdb	_base
+	fcb	$c4
+	fcb	$04,$12,$0f,$10
+__drop	lbsr	___usne
+	leau	2,u		; Drop the stack
+	rts
+
+_base	fdb	_dot
+	fcb	$c4
+	fcb	$02,$01,$13,$05
+__base	lbsr	___usne
+	pulu	d
+	cmpb	#02		; Are we asking for a radix less than 2?
+	bhs	>		; No, check for upper bound
+	ldx	#e_prnge	; Yes, emit the range error.
+	swi
+!	cmpb	#36		; Are we asking for a radix greater than 36?
+	bls	>		; No, update the radix
+	ldx	#e_prnge	; Yes, emit the range error.
+	swi
+!	stb	radix
+	andcc	#$e0
+	rts
+
+
+_dot	fdb	_add
+	fcb	$c1
+	fcb	$2e		; '.'
+	; Step 1: Check the stack depth
+__dot	cmpu	#prmstk		; Do we have something on the stack?
+	blo	>		; Yes, skip the error condition
+	ldx	#e_stkdp	; No, Signal a stack depth error.
+	swi
+	; Step 2: Take over the multiplicative overflow error temporarily
+!	ldx	e_mulof
+	pshs	x
+	ldx	#_d_pwdn
+	stx	e_mulof
+	; Step 3: Set up local variables
+_d_pow	equ	$3		; The radix powers offset
+_d_dgf	equ	$1		; The digit found flag
+_d_itr	equ	$0		; The inner loop iteration counter
+_d_lvsz	equ	-$22		; Bytes to reserve for the local variables
+_d_npow	equ	$10		; How many powers we're calculating
+	leax	,s		; Allocate temporary storage in the stack for
+	leas	_d_lvsz,s	; radix powers and flags.
+	; Step 4: Prepare for output
+!	ldy	prtcrsr		; Set up to output
+	lda	#$20
+	sta	,y+		; Give a space afterwards
+	; Step 5: calculate the radix powers
+	; - Start radix power calculation here
+	ldb	radix		; Let's find our maximum divisor for our
+	clra			; assigned radix
+3	std	,--x		; We'll have at least one digit to display.
+	; - Calculate the next power of the radix
+	pshu	d
+	clra
+	ldb	radix
+	pshu	d
+	pshs	x		; Trapping the overflow clobbers x
+	lbsr	_i_mul		; If the new power overflows, we're done.
+	puls	x		; If id didn't, we're here.
+	pulu	d		; We haven't, so calculate the next power.
+	bra	3b
+	; - Recover from the multiplicative overflow
+_d_pwdn	leau	4,u		; Dump the parameter stack,
+	leas	14,s		; dump the return stack from SWI,
+	puls	x		; and retrieve our biggest radix power location.
+	; Step 6: Calculate and display the digits.
+	clr	_d_dgf,s
+	; - This is the outer loop, printing (or not) each digit
+4	tfr	s,d		; Get the end of the divisor list.
+	addd	#-_d_lvsz
+	pshs	d
+	cmpx	,s++		; Are we there?
+	beq	5f		; Yes, head to the finish-up.
+	clr	_d_itr,s	; no, clear the iteration counter and keep going
+	; This is the inner loop, calculating each digit.
+	ldd	,u		; Grab the original number
+!	subd	,x		; Subtract the power
+	bcs	6f		; We've gone over, so we need to back up one
+	inc	_d_itr,s	; Increment the iteration counter
+	inc	_d_dgf,s	; Set the we've found a digit flag
+	bra	<		; and let's try another round.
+6	addd	,x++		; Restore the number for the next power
+	std	,u		; and put it back where we got it.
+	tst	_d_dgf,s	; Did we find a digit?
+	beq	4b		; No, skip the print cycle.
+	; - If we're here, we've found a digit, and need to print every digit
+	;   hereafter.  The value of the digit is in the iteration counter.
+	;   We need to adjust this to the appropriate VDGscii character.
+	lda	#$01
+	sta	_d_dgf,s	; Make sure we see the next digit
+	lda	_d_itr,s	; Grab the digit value
+	cmpa	#9		; Do we have a digit >9?
+	bhi	>		; Yes, skip the <=9 digit bit
+	adda	#$70		; We're going with inverse video for output
+	bra	7f		; Skip over >9 digit bit
+!	adda	#$40-$9		; Adjust for inverse video A-Z
+7	sta	,y+		; Print the character
+	bra	4b		; Head back to the beginning of the outer loop
+	; - If we're here, we're done with the outer loop.  We need to print the
+	;   final digit.
+5	pulu	d		; Grab the ones place number
+	cmpb	#9		; Do we have a digit >9?
+	bhi	>		; Yes, skip the <=9 digit bit
+	addb	#$70		; We're going with inverse video for output
+	bra	8f		; Skip over >9 digit bit
+!	addb	#$40-$9
+8	stb	,y+
+	sty	prtcrsr		; Save the output cursor location.
+	; Step 7: clean up and go home.
+	leas	-_d_lvsz,s	; Release the local variables
+	puls	x		; Restore the original multiplicative overflow
+	stx	e_mulof		; error handler
+	rts
+
+
+_add	fdb	_depth
+	fcb	$c1
+	fcb	$2b		; '+'
+__add	bsr	__depth
+	pulu	d
+	cmpb	#$02		; Do we have two parameters?
+	bhs	>		; Yes, continue on.
+	ldx	#e_stkdp	; No, Signal a stack depth error.
+	swi
+!	pulu	d
+	addd	,u++
+	pshu	d
+	andcc	#$e0
+	rts
+
+
+_depth	fdb	$0000		; The link field
+	fcb	$c5		; The name field header
+		; The name of the word: "DEPTH"
+	fcb	$04,$05,$10,$14,$08
+__depth	tfr	u,d		; We need to do math on the parameter stack loc
+	subd	#prmstk		; The number of bytes, but negated
+	comb			; Calculating two's complement is a simple
+	coma			; bitwise negation followed by an increment.
+	addd	#$01		; We use add because we need the carry flag.
+	asra			; But we're counting words, not bytes
+	rorb			; so divide by two for the true count
+	pshu	d
+	rts
