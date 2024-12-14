@@ -44,6 +44,35 @@ start	lda	#$ff
 	tfr	a,dp		; Set the direct page to the I/O space
 	lds	#sysstk		; Set the bottom of stack to $0100
 	ldu	#prmstk		; Set the bottom of the parameter stack to $8000
+
+	; Set up the SAM
+	ldx	#$FFC0
+	clra
+	; ; Set display mode control to text/semi4
+	sta	,x++
+	sta	,x++
+	sta	,x++
+	; ; Set video memory offset
+	sta	,x++
+	leax	1,x
+	sta	,x+
+	sta	,x++
+	sta	,x++
+	sta	,x++
+	sta	,x++
+	sta	,x++
+	; ; Page 1, set to 0 by definition
+	sta	,x++
+	; ; CPU rate
+	sta	,x++
+	sta	,x++
+	; ; Memory size
+	sta	,x++
+	leax	1,x
+	sta	,x+
+	; ; Map type, set to 0 by definition
+	sta	,x
+
 	; Initialize the error vector table
 	ldx	#e_table
 	ldd	#_edfalt
@@ -109,33 +138,6 @@ start	lda	#$ff
 	; mask FIRQ and IRQ
 	orcc	#$50
 	
-	; Set up the SAM
-	ldx	#$FFC0
-	clra
-	; ; Set display mode control to text/semi4
-	sta ,x++
-	sta ,x++
-	sta ,x++
-	; ; Set video memory offset
-	sta ,x++
-	leax 1,x
-	sta ,x+
-	sta ,x++
-	sta ,x++
-	sta ,x++
-	sta ,x++
-	; ; Page 1, set to 0 by definition
-	sta ,x++
-	; ; CPU rate
-	sta ,x++
-	sta ,x++
-	; ; Memory size
-	sta ,x++
-	leax 1,x
-	sta ,x+
-	; ; Map type, set to 0 by definition
-	sta ,x
-
 	; Set the VDG operation bits
 	lda	#$08
 	sta	<$22
@@ -152,7 +154,6 @@ start	lda	#$ff
 mainlp	sync
 	lda	<$02
 	lda	<$00
-
 	; begin keyboard poll
 	clr	isshft		; Clear the shift flag
 	lda	#$7f		; Initial setup to poll column 7

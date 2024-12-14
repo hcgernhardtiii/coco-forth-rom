@@ -10,6 +10,10 @@ main.rom: main.6809 dict.6809 errhndlrs.6809
 
 assemble: main.rom
 
+xroar: assemble
+	cp main.rom $(HOME)/.xroar/roms/bas10.rom
+	xroar -machine cocous -bas bas10 -no-extbas
+
 run: assemble
 	mame coco -debug -skip_gameinfo -window -nomaximize -resolution0 800x600 -bios b10 -ext ""
 
