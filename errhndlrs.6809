@@ -71,3 +71,9 @@ _mmttok	fcv	"There",$27,"s",$20,"nuthin",$27,$20,"left",$20
         fcv	"to",$20,"read",0
 _emttok	ldx	#_mmttok
 	lbra	eprntr
+
+_mrdxrg	fcv	"I",$20,"can",$27,"t",$20,"count",$20,"right"
+	fcv	$20,"now",0
+_erdxrg	ldx	#_mrdxrg
+	lbra	eprntr
+
