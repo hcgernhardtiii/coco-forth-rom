@@ -1,4 +1,5 @@
 charset
-next-things-to-do.txt
-filming-notes.txt
-
+*.txt
+*.rom
+*.lst
+.vscode

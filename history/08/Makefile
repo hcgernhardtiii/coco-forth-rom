@@ -20,11 +20,6 @@ run: assemble
 nodebug: assemble
 	mame coco -skip_gameinfo -nomouse -window -nomaximize -resolution0 800x600 -bios b10 -ext ""
 
-burnable: assemble
-	dd if=/dev/zero of=tmp bs=8K count=1
-	cat tmp main.rom > forth.rom
-	rm tmp
-
 incver:
 	mkdir history/$(NEXT_VER)
 	cp main.6809 history/$(NEXT_VER)/main.6809

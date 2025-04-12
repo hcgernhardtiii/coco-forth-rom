@@ -12,8 +12,6 @@ e_mulof	rmb	2		; Multiplicative overflow
 e_prnge	rmb	2		; Parameter out of range
 e_nptbl	rmb	2		; Unprintable character
 e_mttok	rmb	2		; Empty token stream
-e_rdxrg rmb	2		; Radix out of range
-e_notim	rmb	2		; Not an immediate word
 	
 	; System variables
 	org	$0200
@@ -26,15 +24,9 @@ crsdly	rmb	1		; The cursor delay variable
 tokbuf	rmb	$20		; The token processing buffer
 eotbuf
 dicttop	rmb	2		; The top of the dictionary
-	rmb	1		; blank byte for alignment
 radix	rmb	1		; The current system radix
 dsptr	rmb	2		; The data space pointer
 tscrsr	rmb	2		; The token stream cursor
-
-numflgs	rmb	1		; Flags for numeric entry information:
-f_sgn	equ	1		; [0:1] Set if sign marker has been encountered
-f_pfx	equ	2		; [1:1] Set if prefix marker has been encountered
-f_dig	equ	4		; [2:1] Set if a valid digit has been encountered
 
 	org	$a000
 	; System constants
@@ -101,10 +93,6 @@ start	lda	#$ff
 	std	,x++
 	ldd	#_emttok
 	std	,x++
-	ldd	#_erdxrg
-	std	,x++
-	ldd	#_enotim
-	std	,x++
 	; Initialize the variable area
 	ldx	#kpbuf		; Clear the keypress buffer
 !	clr	,x
@@ -116,11 +104,10 @@ start	lda	#$ff
 	stx	curcrsr
 	ldd	#_dicttop	; Initialize the dictionary top location
 	std	dicttop
-	ldd	#$000a		; The initial radix for the system
-	std	radix-1
+	lda	#$0a		; The initial radix for the system
+	sta	radix
 	ldd	#dsstrt		; The start of data space
 	std	dsptr
-	clr	numflgs		; Make sure numeric printing is sane
 
 	; Clear out PIA control registers
 	clr	<$01
@@ -249,10 +236,9 @@ pollfin	puls	b,cc		; get the poll value back
 procecb	bita	#$01		; Is this an enter?
 	beq	>		; No, check for clear.
 	sty	prtcrsr		; Yes, put the output cursor at the current
-	pshs	x		; cursor location, and process the line that
+	pshs	x,y		; cursor location, and process the line that
 	jsr	procln		; was just entered.
-	puls	x
-	ldy	curcrsr
+	puls	x,y
 	ldb	#$20		; Clear the screen location at the current
 	stb	,y		; cursor location
 	tfr	y,d		; Get the current cursor location
@@ -401,19 +387,12 @@ shwcrsr	ldy	curcrsr
 
 	; Process a line for tokens.
 	; Clobbers D, X, Y
-	; Updates current cursor location
 procln	ldx	prvcrsr
 2	ldy	#tokbuf
 	lda	#$20		; If we encounter a blank, we haven't hit the
 3	cmpx	curcrsr		; Have we hit the cursor location?
 	bne	>		; No, skip forward.
-	ldx	prtcrsr
-	lda	#$20		; Yes, we're done, so print the OK,
-	sta	,x+
-	ldd	#$4f4b
-	std	,x++
-	stx	curcrsr		; update the cursor position,
-	rts			; and go home.
+	rts			; Yes, we're done.
 !	cmpa	,x+		; Are we at the beginning of the token?
 	beq	3b		; No, move forward and continue.
 	leax	-1,x		; Back up one 'cause we overshot
@@ -422,6 +401,7 @@ procln	ldx	prvcrsr
 	cmpy	#tokbuf+$20	; Have we overflowed the token buffer?
 	bne	>		; No, keep going.
 	jmp	[e_tokln]	; Yes, trigger the error.
+	rts			; and go home.
 !	cmpx	curcrsr		; Are we at the current cursor location?
 	beq	>		; Yes, hand off to token processing
 	cmpa	,x		; Have we come to a space yet?
@@ -433,7 +413,7 @@ procln	ldx	prvcrsr
 	; Dispatch the processing of a token
 proctk	pshs	d
 	stx	tscrsr		; Save the token stream cursor value
-	lbsr	srchdct
+	bsr	srchdct
 	bcc	>		; Carry set means the word wasn't found
 	bsr	procnum		; If it wasn't found, try as a number
 !	puls	d
@@ -445,46 +425,10 @@ proctk	pshs	d
 	; Clobbers D, X
 procnum	clr	,-u		; The parameter stack will be receiving this
 	clr	,-u		; number, so let's set it up
-	clr	numflgs		; Clear the number processing flags
 	ldx	#tokbuf		; We need the first potential digit
-	lda	radix		; Lets' get our original radix,
-	sta	radix-1		; and save it.
 __stdgt	ldb	,x+		; Get the character
-	lbeq	__pnerr		; If it's zero, that's not a valid digit.
-	; Initial check:  Have we encountered a valid digit?
-	lda	#f_dig
-	bita	numflgs
-	bne	3f		; We've seen a valid digit, so skip prefixing
-	; Sign check and processing
-	cmpb	#$2d		; Are we trying to enter a negative value?
-	bne	>		; No, skip to prefix checking.
-	lda	#f_sgn		; Yes, check to see if we already did.
-	bita	numflgs		; Have we already hit a negation?
-	bne	__pnerr		; Yes, so this isn't a valid number.
-	ora	numflgs		; Set the negation flag
-	sta	numflgs		; and store it
-	bra	__stdgt		; Loop back around.
-!	; Prefix check and processing
-	lda	#f_pfx		; Have we seen a prefix yet?
-	bita	numflgs
-	bne	3f		; Yes, we have, skip to digit processing.
-	cmpb	#$23		; Is it decimal?
-	bne	>		; Nope.
-	lda	#10		; Yes, so set our acting radix to 10.
-	bra	2f		; and move along.
-!	cmpb	#$24		; Is it hexadecimal?
-	bne	>		; Nope.
-	lda	#$10		; Yes, so set our acting radix to 16.
-	bra	2f		; and move along.
-!	cmpb	#$25		; Is it binary?
-	bne	3f		; Nope, so no radix change is needed.
-	lda	#2		; Yes, so set our acting radix to 2.
-2	sta	radix		; Store our working radix
-	lda	#f_pfx		; Set our prefix or digit seen bit
-	ora	numflgs
-	sta	numflgs
-	bra	__stdgt		; and start grabbing the number.
-3	cmpb	#$1a		; It could b A-Z
+	beq	__pnerr		; If it's zero, that's not a valid digit.
+	cmpb	#$1a		; It could b A-Z
 	bgt	>		; It's not, so skip forward
 	addb	#$09		; It is, so adjust for a radix > 10
 	bra	__dodgt		; And move on to the digit done logic.
@@ -493,12 +437,8 @@ __stdgt	ldb	,x+		; Get the character
 	cmpb	#$39		; It could still be a digit
 	bgt	__pnerr		; Nope, so go to the error condition
 	subb	#$30		; Adjust for a decimal digit
-__dodgt	lbsr	___rdck		; Check the radix for validity.
-	cmpb	radix		; Is this a valid digit?
+__dodgt	cmpb	radix		; Is this a valid digit?
 	bgt	__pnerr		; Nope, go to the error condition
-	lda	#f_dig		; We're encountering a digit, so
-	ora	numflgs		; set the flag even if we've already done so
-	sta	numflgs		; because it likely costs less than testing.
 	clra	
 	pshs	d		; Save the digit value
 	lda	radix		; get the radix
@@ -516,21 +456,14 @@ __dodgt	lbsr	___rdck		; Check the radix for validity.
 	std	,u		; Store the number on the parameter stack
 	pshs	y
 	cmpx	,s++		; Did we just finish the number?
-	lblt	__stdgt		; No, get the next digit
+	blt	__stdgt		; No, get the next digit
 	bra	__pndne		; And finish up.
-__pnerr	bsr	__pnrst		; Restore the original radix
-	jmp	[e_toknf]	; An invalid number means the token wasn't found
-__pndne	lda	numflgs		
-	bita	#f_sgn		; Are we entering a negative number?
-	beq	>		; No, skip the negation
-	lbsr	_i_ngte		; Yes, negate the value
-!	bsr	__pnrst		; Restore the original radix
-	rts
-__pnrst	lda	radix-1		; Restore the original radix
-	anda	#$5f		
-	sta	radix		
-	clr	radix-1		; Clear the radix flag byte
-	clr	numflgs		; Clear the number entry flags
+__pnerr	jmp	[e_toknf]	; An invalid number means the token wasn't found
+__pndne	ldx	prtcrsr
+	lda	#$20
+	sta	,x+
+	ldd	#$4f4b
+	std	,x++
 	rts
 
 	; Search the dictionary for a word.
@@ -556,16 +489,16 @@ srchdct	ldx	dicttop		; Get the first dictionary item
 3	inca			; Increment our position offset
 	cmpy	,s		; Are we at the end of the token?
 	bne	<		; No, so loop back
-	; If we're here, we've found the word.  Let's check if it's immediate.
-	ldb	#$40
-	bitb	2,x		; Check the immediate bit
-	bne	>		; It's immediate, so we can move on.
-	ldx	#e_notim	; It's not immediate, so error out
-	swi
-	; Since we've already saved Y, we will also save X and D here so
-	; they're freely available for the word we're calling.
-!	pshs	x,d
+	; If we're here, we've found the word.  Since we've already saved Y,
+	; we will also save X and D here so they're freely available for the
+	; word we're calling.
+	pshs	x,d
 	jsr	a,x		; So head off to the word code itself.
+!	ldx	prtcrsr
+	lda	#$20		; Print the OK Message
+	sta	,x+
+	ldd	#$4f4b
+	std	,x++
 	puls	d,x,y		; Restore word-clobb'd regs and end of token loc
 	andcc	#$f0		; Clear any error conditions,
 	rts			; And go home.
@@ -574,20 +507,6 @@ srchdct	ldx	dicttop		; Get the first dictionary item
 	bra	1b		; We have an address, so look at the next one
 !	orcc	#$01		; Exit with carry set, indicating not found
 	rts
-
-	; Performs a check of the current radix.  If it is outside the range
-	; (2…36), an error condition exists.
-	; Clobbers A
-___rdck	lda	radix
-	cmpa	#2		; Is the radix less than 2?
-	blo	>		; No, keep checking.
-	cmpa	#36		; Is it bigger than 36?
-	bhi	>		; No, keep checking.
-	; If we're here, we're fine.
-	rts
-	; If we're here, the radix is out of range.
-!	ldx	#e_rdxrg
-	swi
 
 	; Performs a newline on screen and checks for scroll.
 	; Expects the current cursor position in Y
@@ -664,27 +583,6 @@ ___vtoa	tsta			; Is it the at sign?
 	; can't be typed based upon what we've done so far.
 2	rts
 
-	; Checks the sign of a single-cell number, flipping the sign bit if
-	;   applicable.
-___scks	ldb	,u
-	bitb	#$80		; Is TOS negative?
-	beq	>		; No, check NOS.
-	lbsr	_i_ngte		; Negate the value
-	ldb	#f_sgn		; and flip the sign flag bit
-	eorb	numflgs
-	stb	numflgs
-!	rts
-
-	; Checks the sign of a double-cell number, flipping the sign bit if
-	;   applicable.
-___sckd ldb	,u
-	bitb	#$80		; Is TOS negative?
-	beq	>		; No, check NOS.
-	lbsr	_i_dngt		; Negate the value
-	ldb	#f_sgn		; and flip the sign flag bit
-	eorb	numflgs
-	stb	numflgs
-!	rts
 
 	include "errhndlrs.6809"
 

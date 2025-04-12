@@ -1,269 +1,5 @@
 _dicttop
 
-_and	fdb	_or
-	fcb	$c3
-	fcv	"and"
-__and	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	anda	,u
-	andb	,u+1
-	std	,u
-	rts
-
-_or	fdb	_xor
-	fcb	$c2
-	fcv	"or"
-__or	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	ora	,u
-	orb	,u+1
-	std	,u
-	rts
-
-_xor	fdb	_smsrem
-	fcb	$c3
-	fcv	"xor"
-__xor	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	eora	,u
-	eorb	,u+1
-	std	,u
-	rts
-
-	; Symmetric divide double-cell by single-cell, leave remainder
-	; in NOS and quotient in TOS
-_smsrem	fdb	_stod
-	fcb	$c6
-	fcv	"sm",$2f,"rem"
-__smsrm	lbsr	__depth
-	pulu	d
-	cmpb	#$03		; We need three items
-	bhs	>
-	ldx	#e_stkdp	; If we don't have 'em, error out.
-	swi
-!	; For internal use
-_i_smsr	ldd	,u		; Grab the divisor
-	bne	>		; If it's zero, we error out.
-	ldx	#e_div0		; Signal a divide by zero error.
-	swi
-!	; check for signedness
-	clr	numflgs
-	lbsr	___scks		; Check for divisor signedness
-	leau	2,u
-	lbsr	___sckd		; Check for dividend signedness
-	leau	-2,u
-	; If we need an internal entry point, it should be here.
-	tfr	s,x		; Set up our tempvar frame
-	leas	-3,s
-	clr	-1,x
-	clr	-2,x		; -2,x will be the quotient
-	clr	-3,x		; -3,x will be the shift count
-	lbsr	_i_stod		; Bit-match our quotient
-!	; If the divisor is less than the dividend, shift one left and
-	; increase the shift count.  Otherwise move to the division process.
-	ldd	,u
-	cmpd	4,u
-	bhi	2f		; MSW NOS > MSW TOS: divisor bigger
-	blo	1f		; MSW NOS < MSW TOS: divisor smaller
-	; If we're here, MSW NOS == MSW TOS
-	ldd	2,u
-	cmpd	6,u
-	bhi	2f		; LSW NOS >= LSW TOS: divisor bigger
-1	; If we're here, we need to shift the divisor left one and
-	; try again.
-	lsl	3,u
-	rol	2,u
-	rol	1,u
-	rol	,u
-	inc	-3,x
-	bra	<
-2	; If we're here, the divisor is now bigger than the dividend.  If the
-	; shift count is zero we skip to remainder handling.
-	ldb	-3,x
-	beq	3f
-	; Check for quotient overflow.
-	cmpb	#$0f		; Have we overflowed the quotient?
-	blo	>		; Nope, we can continue on.
-	bra	4f		; Yes, throw the error condition.
-!	; If we're here, we do the division step.
-	lsr	,u
-	ror	1,u
-	ror	2,u
-	ror	3,u		; Shift the divisor right one
-	lsl	-1,x
-	rol	-2,x		; Shift the quotient left one
-	dec	-3,x		; And decrement the shift count.
-	; If the divisor is bigger than the dividend we move to the next
-	; place.
-	ldd	,u
-	cmpd	4,u
-	bhi	2b		; MSW NOS > MSW TOS: divisor bigger
-	blo	>		; MSW NOS < MSW TOS: divisor smaller
-	; If we're here, MSW NOS == MSW TOS
-	ldd	2,u
-	cmpd	6,u
-	bhi	2b		; LSW NOS >= LSW TOS: divisor bigger
-!	; If we're here, we need to do the subtraction.
-	ldd 	6,u
-	subd 	2,u
-	std 	6,u
-	ldd 	4,u
-	bcc	>
-	subd 	#1
-!	subd 	,u
-	std	4,u
-	; Now increment the quotient
-	ldd	-2,x
-	addd	#1
-	std	-2,x
-	; We're done with the division step, move to the next place.
-	bra	2b
-3	; If we're here, we're done with the division.  Our remainder
-	; is the double-word NOS (it *was* the dividend).  It *should*
-	; be <= $7FFF, otherwise we have a remainder overflow.
-	ldd	4,u		; Is the remainder bigger than $FFFF?
-	beq	>		; No, continue the check.
-	bra	4f		; Yes, throw the error condition.
-!	ldd	6,u		; Is the remainder bigger than $7FFF?
-	bmi	4f		; Yes, throw the error condition.
-	; If we're here, both the quotient and remainder are fine.
-	leau	6,u		; Remainder is now TOS
-	ldd	-2,x
-	pshu	d		; Quotient now TOS, remainder now NOS
-	ldb	numflgs
-	bitb	#f_sgn		; Is the resultant negative?
-	beq	>		; No, we skip over negation.
-	leau	2,u
-	lbsr	_i_ngte		; Negate the remainder
-	leau	-2,u
-	lbsr	_i_ngte		; Negate the quotient
-!	clr	numflgs		; Clean up and go home
-	leas	3,s
-	rts
-4	clr	numflgs
-	ldx	#e_mulof	; Something overflowed.
-	swi
-
-	; Convert a single-cell number to a double-cell number
-_stod	fdb	_rfrom
-	fcb	$c3
-	fcv	"s",$3e,"d"
-__stod	cmpu	#prmstk		; Do we have something on the stack?
-	blo	>		; Yes, skip the error condition
-	ldx	#e_stkdp	; No, Signal a stack depth error.
-	swi
-!	; We will use this internally
-_i_stod	clr	,-u
-	clr	,-u
-	tst	2,u		; Is this a negative number?
-	bpl	>		; No, skip the sign extension
-	com	,u
-	com	1,u		; Sign-extend the MSB
-!	rts
-
-	; Move the top of the return stack to TOS
-_rfrom	fdb	_tor
-	fcb	$92
-	fcv	"r",$3e		; `R>`
-__rfrom	; We will use this internally
-_i_rfrm	puls	d
-	pshu	d
-	rts
-
-	; Move TOS to the top of the return stack
-_tor	fdb	_dnegat
-	fcb	$92
-	fcv	$3e,"r"		; `>R`
-__tor	cmpu	#prmstk		; Do we have something on the stack?
-	blo	>		; Yes, skip the error condition
-	ldx	#e_stkdp	; No, Signal a stack depth error.
-	swi
-!	; We will use this internally
-_i_tor	pulu	d
-	pshs	d
-	rts
-
-	; Negate a double-cell number
-_dnegat	fdb	_deciml
-	fcb	$c7
-	fcv	"dnegate"
-__dngat	cmpu	#prmstk		; Do we have something on the stack?
-	blo	>		; Yes, skip the error condition
-	ldx	#e_stkdp	; No, Signal a stack depth error.
-	swi
-!	; We will use this internally
-_i_dngt	com 	,u
-	com	1,u
-	com	2,u
-	com	3,u		; Bitwise negate the double-word
-	inc	3,u		; and do the increment.
-	bne	>
-	inc	2,u
-	bne	>
-	inc	1,u
-	bne	>
-	inc	,u
-!	rts
-
-	; Set the radix to decimal
-_deciml	fdb	_hex
-	fcb	$c7
-	fcv	"decimal"
-__decml	lda	#10
-	sta	radix
-	rts
-
-	; Set the radix to hexadecimal
-_hex	fdb	_negate
-	fcb	$c3
-	fcv	"hex"
-__hex	lda	#$10
-	sta	radix
-	rts
-
-	; Two's compliment negation
-_negate	fdb	_invert
-	fcb	$c6
-	fcv	"negate"
-__ngte	cmpu	#prmstk		; Do we have something on the stack?
-	blo	>		; Yes, skip the error condition
-	ldx	#e_stkdp	; No, Signal a stack depth error.
-	swi
-!	; We will use this internally
-_i_ngte	com	,u		; invert the bits
-	com	1,u
-	inc	1,u		; increment
-	bne	>
-	inc	,u
-!	rts
-
-	; Bitwise NOT
-_invert	fdb	_move
-	fcb	$c6
-	fcv	"invert"
-__invrt	cmpu	#prmstk		; Do we have something on the stack?
-	blo	>		; Yes, skip the error condition
-	ldx	#e_stkdp	; No, Signal a stack depth error.
-	swi
-!	com	,u		; invert the bits
-	com	1,u
-	rts
-
 _move	fdb	_char
 	fcb	$c4
 	fcv	"move"
@@ -584,7 +320,7 @@ __dup	lbsr	___usne
 	pshu	d		; and duplicate it
 	rts
 
-_dropn	fdb	_mstar
+_dropn	fdb	_mul
 	fcb	$c5
 	fcb	$04,$12,$0f,$10,$0e
 		; 'DROPN'
@@ -603,95 +339,93 @@ __dropn	lbsr	__depth
 	swi
 2	rts			; and go home.
 
-_mstar	fdb	_star
-	fcb	$c2
-	fcv	"m",$2a
-__mstar	lbsr	__depth
-	pulu	d
-	cmpb	#$02		; Do we have enough on the stack?
-	bhs	>		; Yes, keep going
-	ldx	#e_stkdp	; Yes, signal a stack depth error.
-	swi
-!	; Check for signedness
-	clr	numflgs
-	lbsr	___scks		; Check for TOS signedness
-	leau	2,u
-	lbsr	___scks		; Check for NOS signedness
-	leau	-2,u		; restore the parameter stack
-_i_mstr	; Prepare our temporary storage area
-	clra
-	clrb
-	std	-2,s
-	std	-4,s
-	; Multiply the LSBs of TOS and NOS
-	lda	1,u
-	ldb	3,u
-	mul
-	std	-2,s		; Store this result
-	; Multiply the LSB of TOS with MSB of NOS (result shifts one byte left)
-	lda	1,u
-	ldb	2,u
-	mul
-	addd	-3,s		; Add the shifted value to our result
-	std	-3,s		; and store
-	; Multiply the MSB of TOS with LSB of NOS (result shifts one byte left)
-	lda	,u
-	ldb	3,u
-	mul
-	addd	-3,s		; Add the shifted value to our result
-	std	-3,s		; and store
-	; Multiply the MSB of TOS with MSB of NOS (result shifts two bytes left)
-	lda	,u
-	ldb	2,u
-	mul
-	addd	-4,s		; Add the shifted value to our result
-	; Transfer to parameter stack:
-	std	,u		; MSW to TOS
-	ldd	-2,s
-	std	2,u		; LSW to NOS
-	; At this point we have a guaranteed >=0 double-cell number.
-	ldb	numflgs
-	bitb	#f_sgn		; Is the number negative?
-	beq	>		; No, we skip over negation
-	lbsr	_i_dngt
-!	clr	numflgs
-	rts
-
-_star	fdb	_slash
+_mul	fdb	_div
 	fcb	$c1
 	fcb	$2a		; '*'
-__star	lbsr	__depth
+__mul	lbsr	__depth
 	pulu	d
 	cmpb	#$02		; Do we have enough on the stack?
-	bhs	>		; Yes, keep going
+	bhs	_i_mul		; Yes, keep going
 	ldx	#e_stkdp	; Yes, signal a stack depth error.
 	swi
-!	clr	numflgs		; We don't need to sign extend
-	bsr	_i_mstr
-	leau	2,u
-	rts
+_i_mul	tst	,u
+	beq	2f		; If the MSB of the multiplier is 0, we're good
+	tst	2,u
+	bne	1f		; Both MSBs are non-zero.  This *will* overflow.
+2	lda	1,u
+	ldb	3,u
+	mul			; Multiply the LSBs
+	std	-2,s		; And hold the resultant in a tempvar.
+	lda	1,u
+	ldb	2,u
+	mul			; Multiply TOS LSB and NOS MSB
+	tsta			; If the product exceeds $ff it's an overflow
+	bne	1f		; so error out.
+	exg	a,b
+	addd	-2,s		; Add it to the previous partial product
+	std	-2,s		; and save it.
+	lda	,u
+	ldb	3,u
+	mul			; Multiply TOS MSB and NOS LSB
+	tsta			; If the product exceeds $ff it's an overflow
+	bne	1f		; so error out.
+	exg	a,b
+	addd	-2,s		; Add it to the previous partial product,
+	leau	2,u		; pop the parameter stack,
+	std	,u		; save the product,
+	bra	2f		; and go home.
+1	ldx	#e_mulof	; Signal a multiplicative overflow
+	swi
+2	rts
 
-_slash	fdb	_swap
+_div	fdb	_swap
 	fcb	$c1
 	fcb	$2f
-__slash	lbsr	__depth
+__div	lbsr	__depth
 	pulu	d
 	cmpb	#$02		; Do we have two parameters?
 	bhs	>		; Yes, continue on.
 	ldx	#e_stkdp	; No, Signal a stack depth error.
 	swi
-!	; Make sure the dividend has been transformed to a double-cell number
-	pulu	d
-	pshs	d
-	lbsr	_i_stod
-	puls	d
-	pshu	d
-	; Call `sm/rem`—it'll handle sign checking and whatnot
-	lbsr	_i_smsr
-	; Perform a swapdrop
-	pulu	x,y
-	pshu	x
-	rts
+!	ldd	,u		; Get our divisor
+	beq	1f		; Signal a divide by zero error
+	clr	-1,s
+	clr	-2,s		; Clear out our quotient tempvar
+	clr	-3,s		; Clear out the tempvar for the shift count
+3	cmpd	2,u		; Is the divisor bigger than the dividend?
+	bhi	2f		; Yes, we head to the actual division bit.
+	lslb
+	rola			; Shift the divisor left one,
+	inc	-3,s		; Increment our shift count,
+	bra	3b		; And keep going.
+2	tst	-3,s		; Have we finished the division process?
+	bne	4f		; No, let's continue the loop.
+	leau	4,u		; Yes, so drop the stack,
+	ldd	-2,s		; load the quotient,
+	pshu	d		; and put it on the parameter stack.
+	bra	5f		; Finish up and go home.
+4	; When we get here, the divisor is already shifted one bit bigger than
+	; the dividend.  Thus, the first right shift is necessary.
+	lsra
+	rorb			; Shift the divisor right one,
+	lsl	-1,s
+	rol	-2,s		; shift the quotient left one,
+	dec	-3,s		; and decrement the shift count.
+	cmpd	2,u		; Is the divisor bigger than our dividend?
+	bhi	2b		; Yes, go to the next digit.
+	std	-5,s		; No, we need to do the subtraction.
+	ldd	2,u
+	subd	-5,s
+	std	2,u
+	ldd	-2,s
+	addd	#1
+	std	-2,s		; Increment our quotient
+	ldd	-5,s		; Get the divisor back
+	bra	2b		; Continue with the loop
+	bra	>
+1	ldx	#e_div0		; Signal a divide by zero error.
+	swi
+5	rts
 
 _swap	fdb	_sub
 	fcb	$c4
@@ -734,60 +468,47 @@ __drop	lbsr	___usne
 _base	fdb	_dot
 	fcb	$c4
 	fcb	$02,$01,$13,$05
-__base	ldd	#radix-1	; Get the cell-aligned address of the radix
-	pshu	d		; and drop it on the stack
+__base	lbsr	___usne
+	pulu	d
+	cmpb	#02		; Are we asking for a radix less than 2?
+	bhs	>		; No, check for upper bound
+	ldx	#e_prnge	; Yes, emit the range error.
+	swi
+!	cmpb	#36		; Are we asking for a radix greater than 36?
+	bls	>		; No, update the radix
+	ldx	#e_prnge	; Yes, emit the range error.
+	swi
+!	stb	radix
+	andcc	#$e0
 	rts
 
-_dot	fdb	_udot
+
+_dot	fdb	_add
 	fcb	$c1
 	fcb	$2e		; '.'
-	; Step 0: Do the radix check
-__dot	lbsr	___rdck
 	; Step 1: Check the stack depth
-	cmpu	#prmstk		; Do we have something on the stack?
+__dot	cmpu	#prmstk		; Do we have something on the stack?
 	blo	>		; Yes, skip the error condition
 	ldx	#e_stkdp	; No, Signal a stack depth error.
 	swi
-!	; Step 2: If the number is negative, let's print the negative sign and
-	; negate the number for printing.
-	tst	,u		; Are we negative?
-	bpl	>		; No, skip negation
-	ldx	prtcrsr		; Yes, print the negative sign
-	lda	#$20
-	sta	,x+
-	lda	#$6d
-	sta	,x
-	stx	prtcrsr
-	lbsr	__ngte		; Negate the value
-!	bra	__d_udt		; Go to the digit printing
-
-_udot	fdb	_add
-	fcb	$c2
-	fcv	"u",$2e		; 'U.'
-	; Step 0: Do the radix check
-__udot	lbsr	___rdck
-	; Step 1: Check the stack depth
-	cmpu	#prmstk		; Do we have something on the stack?
-	blo	__d_udt		; Yes, skip the error condition
-	ldx	#e_stkdp	; No, Signal a stack depth error.
-	swi
-	; Step 2: Set up local variables
+	; Step 2: Take over the multiplicative overflow error temporarily
+!	ldx	e_mulof
+	pshs	x
+	ldx	#_d_pwdn
+	stx	e_mulof
+	; Step 3: Set up local variables
 _d_pow	equ	$3		; The radix powers offset
 _d_dgf	equ	$1		; The digit found flag
 _d_itr	equ	$0		; The inner loop iteration counter
 _d_lvsz	equ	-$22		; Bytes to reserve for the local variables
 _d_npow	equ	$10		; How many powers we're calculating
-__d_udt	leax	,s		; Allocate temporary storage in the stack for
+	leax	,s		; Allocate temporary storage in the stack for
 	leas	_d_lvsz,s	; radix powers and flags.
-	; Step 3: Prepare for output
-	ldy	prtcrsr		; Set up to output
-	lda	#$6d		
-	cmpa	,y		; Do we have a negative sign?
-	beq	>		; Yes, so skip placing the space
-	lda	#$20		; No, so place a space
-	sta	,y		
-!	leay	1,y
-	; Step 4: calculate the radix powers
+	; Step 4: Prepare for output
+!	ldy	prtcrsr		; Set up to output
+	lda	#$20
+	sta	,y+		; Give a space afterwards
+	; Step 5: calculate the radix powers
 	; - Start radix power calculation here
 	ldb	radix		; Let's find our maximum divisor for our
 	clra			; assigned radix
@@ -797,13 +518,15 @@ __d_udt	leax	,s		; Allocate temporary storage in the stack for
 	clra
 	ldb	radix
 	pshu	d
-	lbsr	_i_mstr
-	ldd	,u++		; Get the MSW from the multiplication
-	bne	_d_pwdn		; If it's non-zero, we've overflowed		
+	pshs	x		; Trapping the overflow clobbers x
+	lbsr	_i_mul		; If the new power overflows, we're done.
+	puls	x		; If id didn't, we're here.
 	pulu	d		; We haven't, so calculate the next power.
 	bra	3b
 	; - Recover from the multiplicative overflow
-_d_pwdn	leau	2,u		; Dump the parameter stack,
+_d_pwdn	leau	4,u		; Dump the parameter stack,
+	leas	14,s		; dump the return stack from SWI,
+	puls	x		; and retrieve our biggest radix power location.
 	; Step 6: Calculate and display the digits.
 	clr	_d_dgf,s
 	; - This is the outer loop, printing (or not) each digit
@@ -849,6 +572,8 @@ _d_pwdn	leau	2,u		; Dump the parameter stack,
 	sty	prtcrsr		; Save the output cursor location.
 	; Step 7: clean up and go home.
 	leas	-_d_lvsz,s	; Release the local variables
+	puls	x		; Restore the original multiplicative overflow
+	stx	e_mulof		; error handler
 	rts
 
 
@@ -864,6 +589,7 @@ __add	bsr	__depth
 !	pulu	d
 	addd	,u++
 	pshu	d
+	andcc	#$e0
 	rts
 
 

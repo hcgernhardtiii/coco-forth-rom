@@ -71,12 +71,3 @@ _mmttok	fcv	"There",$27,"s",$20,"nuthin",$27,$20,"left",$20
         fcv	"to",$20,"read",0
 _emttok	ldx	#_mmttok
 	lbra	eprntr
-
-_mrdxrg	fcv	"I",$20,"can",$27,"t",$20,"count",$20,"right"
-	fcv	$20,"now",0
-_erdxrg	ldx	#_mrdxrg
-	lbra	eprntr
-
-_mnotim fcv	"Urgent",$2c,$20,"but",$20,"not",$20,"immediate",0
-_enotim	ldx	#_mnotim
-	lbra	eprntr
