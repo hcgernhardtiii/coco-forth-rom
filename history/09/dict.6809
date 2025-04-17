@@ -1,225 +1,7 @@
 _dicttop
 
-_colon	fdb	_semicolon
-	fcb	$81
-	fcb	$3a		; ':'
-__colon	; Are the restore points empty?  Because if they're not, we already have
-	;   a set of markers defined.  We don't want to overwrite them.
-	tst	complmk
-	bne	>
-	tst	complmk+1
-	bne	>
-	tst	complmk+2
-	bne	>
-	tst	complmk+3
-	bne	>
-	ldd	dicttop
-	std	complmk
-	ldd	dsptr
-	std	complmk+2
-	; Now we can start dealing with compilation.
-!	lbsr	__creat		; Create the word
-	clr	complst
-	inc	complst		; Set compile state
-	ldd	dsptr		; Reset dsptr to the beginning of the word's
-	subd	#6		;   code field
-	std	dsptr
-	ldd	dicttop
-	pshu	d
-	rts
-
-_semicolon
-	fdb	_literal
-	fcb	$c1
-	fcb	$3b		; ';'
-__semicolon
-	lbsr	___usne
-	leau	2,u		; drop the colon-sys
-	ldb	#$39		; `RTS` opcode
-	stb	[dsptr]		; Store it as the final instruction
-	inc	dsptr		;   and update the data space pointer
-	; Now we need to clear out the restore markers
-	clr	complmk	
-	clr	complmk+1
-	clr	complmk+2
-	clr	complmk+3
-	; And return to interpretation state
-	clr	complst
-	rts
-
-_literal
-	fdb	_compilec
-	fcb	$c7
-	fcv	"literal"
-__literal
-	lbsr	___usne		; Make sure there's something on the stack
-_i_literal
-	ldx	dsptr		; Well, we *are* in compile mode, after all…
-	ldb	#$cc		; `LDD (immediate)` opcode
-	stb	,x+
-	pulu	d		; Grab the number
-	std	,x++		; and store it as the parameter to `LDD`
-	ldd	#$3606		; `PSHU D`
-	std	,x++
-	stx	dsptr
-	rts
-
-_compilec			; compile-comma
-	fdb	_lbkt
-	fcb	$c8
-	fcv	"compile",$2c	; "compile,"
-__compilec
-	lbsr	___usne		; Make sure there's something on the stack
-	; This is going to be using the data space pointer.  Unless we change
-	;   the way we're doing things, we'll be appending compiled code to
-	;   the location at the data space pointer.  We'll deal with potential
-	;   RAM limitations later.
-_i_compilec
-	ldx	dsptr
-	ldb	#$bd		; The opcode for `JSR (extended)`
-	stb	,x+		; Put that into the data region
-	pulu	d		; Grab the execution address
-	std	,x++		;   and store it as the parameter for `JSR`
-	stx	dsptr		; Save the new data space pointer
-	rts			; We're done here
-
-_lbkt   fdb	_rbkt
-	fcb	$c1
-	fcb	$1b		; '['
-__lbkt	clr	complst
-	rts
-
-_rbkt	fdb	_execute
-	fcb	$81
-	fcb	$1d		; ']'
-__rbkt	clr	complst
-	inc	complst
-	rts	
-
-_execute
-	fdb	_find
-	fcb	$87
-	fcv	"execute"
-__execute
-	; This should be so ridiculously simple…
-	lbsr	___usne		; Make sure we have something on the stack
-_i_execute
-	pulu	pc		; jump to the address provided
-
-_find	fdb	_state
-	fcb	$84
-	fcv	"find"
-__find	lbsr	___usne		; Make sure we have something on the stack
-_i_find	ldx	dicttop		; Get the top of dictionary pointer
-	ldy	,u		; Get the search string address
-	ldb	,y+		; Get the string length
-	bitb	#$f0		; Is it bigger than 16?
-	beq	>		; No, skip the error condition
-	ldx	#e_tokln	; Yes, token too long error
-	swi
-!	pshs	b		; We'll need this for comparison
-1	ldb	2,x		; Grab the name field header byte
-	andb	#$0f		;   and mask off the length field
-	cmpb	,s		; Are the lengths the same?
-	bne	2f		; Nope, let's move on to the next word
-	lda	#$3		; Yes, let's check the word name.  A contains
-				;   the current offset in the word name we're
-				;   comparing.
-	pshs	y		; We'll need to save the start byte of the
-				;   search term.
-3	ldb	,y+		; Grab the search term character
-	pshs	y
-	ldy	,u		; A hacky bit:  Are we comparing against the
-	cmpy	#toklen		;   token buffer?
-	beq	>		; Yes, so skip the character conversion.
-	lbsr	___atov		; No, so convert the character to VDGSCII
-!	puls	y
-	cmpb	a,x		; Does this character match?
-	beq	>		; Yes, so let's continue the loop.
-	puls	y		; No, so let's reset and go to the next word in
-	bra	2f		;   the dictionary.	
-!	inca			; Increment our character offset
-	ldb	2,s		; Grab our token length and
-	addb	#$3		;   offset adjust it for comparison.
-	pshs	b
-	cmpa	,s+		; Have we reached the end of the token?
-	bne	3b		; No, so continue the comparison loop.
-	; If we're here, we've found the word.  At this point A contains the
-	;   offset to our execution address, which we'll push on the stack as
-	;   the execution token.
-	leau	2,u		; drop the search term address
-	puls	y,b		; get rid of the search term byte count and
-				;   search term start byte
-	leay	a,x		; Put the found execution address in Y and
-	pshu	y		;   push it onto the parameter stack.
-	clra			; We'll start by assuming the word we found is
-	ldb	#1		xt;   immediate or compile-only.
-	pshu	d
-	ldb	#$50		; This is the immediate or compile-only mask.
-	bitb	2,x		; Is it actually immediate or compile-only?
-	bne	>		; Yes, so we don't have to do any flippery.
-	lbsr	_i_ngte		; No, so we change that to -1.
-!	rts			; Let's go home now.
-	; If we're here, we've failed to match the search term with the current
-	;   dictionary word.
-2	ldx	,x		; Get the next dictionary entry
-	beq	>		; If we're at the end, let's get out of here.
-	bra	1b		; Otherwise, we compare the next entry.
-	; If we're here, the search has failed.
-!	clra
-	clrb
-	pshu	d		; Push a zero onto the parameter stack,
-	puls	b		;   clean up,
-	rts			;   and go home.
-
-_state	fdb	_words
-	fcb	$85
-	fcv	"state"
-__state	clra
-	ldx	#complst	; Get our state flag location
-	ldb	,x+		; Get the state flag itself
-	std	,x		; Store it in the mirror
-	pshu	x		; Push the state flag mirror location
-	rts
-
-_words	fdb	_and
-	fcb	$85
-	fcv	"words"
-__words	ldx	dicttop		; Well, there's going to be at least one, right?
-	pshs	x		; We'll be needing the X register available
-	; We could reuse `type`, but it expects an ASCII string.  Our dictionary
-	;   entries are encoded in VDGSCII.  It may not be the most space-
-	;   efficient, but it'll be easier to duplicate code than to refactor
-	;   (at least for now—we'll do refactoring later)
-	; `type` fails to do a proper scroll check.  We *must* do a scroll
-	;   check in `words` because we'll `definitely` be overflowing the
-	;   screen buffer at some point in the dump.  Let's prepare for that
-	;   by ensuring our output cursor is in Y (after all, that's what
-	;   `scrlchk` looks at)
-	ldy	prtcrsr
-1	ldb	#$20
-	stb	,y+		; Prefix a space
-	lda	2,x		; Grab the word name length and
-	anda	#$0f		;   mask it off.
-	leax	3,x		; Point X to the word name
-2	tsta			; Have we hit the end of the string?
-	beq	3f		; Yes, we're done.
-	ldb	,x+		; No, so let's get the character,
-	deca			;   decrement our counter,
-	stb	,y+		;   and put the character on the screen.
-	bra	2b		; Next character, please!
-3	lbsr	scrlchk		; Handle the scroll if we need to
-	ldx	[,s]		; Do we have another dictionary entry?
-	beq	4f		; Nope, let's get out of here.
-	stx	,s		; Yep, so save the new entry location
-	bra	1b		;   and keep going.
-4	sty	prtcrsr		; We're done.  Save the new cursor location,
-	puls	x		;   clean up the stack,
-	rts			;   and go home.
-
-
 _and	fdb	_or
-	fcb	$83
+	fcb	$c3
 	fcv	"and"
 __and	lbsr	__depth
 	pulu	d
@@ -234,7 +16,7 @@ __and	lbsr	__depth
 	rts
 
 _or	fdb	_xor
-	fcb	$82
+	fcb	$c2
 	fcv	"or"
 __or	lbsr	__depth
 	pulu	d
@@ -249,7 +31,7 @@ __or	lbsr	__depth
 	rts
 
 _xor	fdb	_smsrem
-	fcb	$83
+	fcb	$c3
 	fcv	"xor"
 __xor	lbsr	__depth
 	pulu	d
@@ -266,7 +48,7 @@ __xor	lbsr	__depth
 	; Symmetric divide double-cell by single-cell, leave remainder
 	; in NOS and quotient in TOS
 _smsrem	fdb	_stod
-	fcb	$86
+	fcb	$c6
 	fcv	"sm",$2f,"rem"
 __smsrm	lbsr	__depth
 	pulu	d
@@ -379,7 +161,7 @@ _i_smsr	ldd	,u		; Grab the divisor
 
 	; Convert a single-cell number to a double-cell number
 _stod	fdb	_rfrom
-	fcb	$83
+	fcb	$c3
 	fcv	"s",$3e,"d"
 __stod	cmpu	#prmstk		; Do we have something on the stack?
 	blo	>		; Yes, skip the error condition
@@ -396,7 +178,7 @@ _i_stod	clr	,-u
 
 	; Move the top of the return stack to TOS
 _rfrom	fdb	_tor
-	fcb	$d2
+	fcb	$92
 	fcv	"r",$3e		; `R>`
 __rfrom	; We will use this internally
 _i_rfrm	puls	d
@@ -405,7 +187,7 @@ _i_rfrm	puls	d
 
 	; Move TOS to the top of the return stack
 _tor	fdb	_dnegat
-	fcb	$d2
+	fcb	$92
 	fcv	$3e,"r"		; `>R`
 __tor	cmpu	#prmstk		; Do we have something on the stack?
 	blo	>		; Yes, skip the error condition
@@ -418,7 +200,7 @@ _i_tor	pulu	d
 
 	; Negate a double-cell number
 _dnegat	fdb	_deciml
-	fcb	$87
+	fcb	$c7
 	fcv	"dnegate"
 __dngat	cmpu	#prmstk		; Do we have something on the stack?
 	blo	>		; Yes, skip the error condition
@@ -440,7 +222,7 @@ _i_dngt	com 	,u
 
 	; Set the radix to decimal
 _deciml	fdb	_hex
-	fcb	$87
+	fcb	$c7
 	fcv	"decimal"
 __decml	lda	#10
 	sta	radix
@@ -448,7 +230,7 @@ __decml	lda	#10
 
 	; Set the radix to hexadecimal
 _hex	fdb	_negate
-	fcb	$83
+	fcb	$c3
 	fcv	"hex"
 __hex	lda	#$10
 	sta	radix
@@ -456,7 +238,7 @@ __hex	lda	#$10
 
 	; Two's compliment negation
 _negate	fdb	_invert
-	fcb	$86
+	fcb	$c6
 	fcv	"negate"
 __ngte	cmpu	#prmstk		; Do we have something on the stack?
 	blo	>		; Yes, skip the error condition
@@ -472,7 +254,7 @@ _i_ngte	com	,u		; invert the bits
 
 	; Bitwise NOT
 _invert	fdb	_move
-	fcb	$86
+	fcb	$c6
 	fcv	"invert"
 __invrt	cmpu	#prmstk		; Do we have something on the stack?
 	blo	>		; Yes, skip the error condition
@@ -483,7 +265,7 @@ __invrt	cmpu	#prmstk		; Do we have something on the stack?
 	rts
 
 _move	fdb	_char
-	fcb	$84
+	fcb	$c4
 	fcv	"move"
 __move	lbsr	__depth
 	pulu	d
@@ -510,7 +292,7 @@ __move	lbsr	__depth
 
 
 _char	fdb	_twodup
-	fcb	$84
+	fcb	$c4
 	fcv	"char"
 __char	ldx	tscrsr		; Get the current token stream pos'n
 	ldy	#tokbuf		; Get the token buffer
@@ -542,7 +324,7 @@ __char	ldx	tscrsr		; Get the current token stream pos'n
 	rts
 
 _twodup	fdb	_type
-	fcb	$84
+	fcb	$c4
 	fcv	$32,"dup"
 __twodup
 	lbsr	__depth
@@ -558,7 +340,7 @@ __twodup
 	rts
 
 _type	fdb	_count
-	fcb	$84
+	fcb	$c4
 	fcv	"type"
 __type	lbsr	__depth
 	pulu	d
@@ -566,7 +348,6 @@ __type	lbsr	__depth
 	bhs	>		; No, we can keep going
 	ldx	#e_stkdp	; Signal a stack depth error
 	swi
-	; todo: perform scroll check every 32 characters
 !	ldy	prtcrsr		; Grab our output cursor position
 	ldb	#$20
 	stb	,y+		; Prefix output with a space
@@ -586,7 +367,7 @@ __type	lbsr	__depth
 !	rts			; We're done, let's go home.
 
 _count	fdb	_word
-	fcb	$85
+	fcb	$c5
 	fcv	"count"
 __count	lbsr	___usne		; Make sure we have something on the stack
 	pulu	x		; Get the counted string address
@@ -596,7 +377,7 @@ __count	lbsr	___usne		; Make sure we have something on the stack
 	rts
 
 _word	fdb	_bl
-	fcb	$84
+	fcb	$c4
 	fcv	"word"
 __word	lbsr	___usne		; Make sure we have something on the stack
 	ldx	tscrsr		
@@ -633,7 +414,7 @@ __word	lbsr	___usne		; Make sure we have something on the stack
 	rts			; and go home.
 
 _bl	fdb	_emit
-	fcb	$82
+	fcb	$c2
 	fcv	"bl"
 __bl	ldd	#$20
 	pshu	d
@@ -641,7 +422,7 @@ __bl	ldd	#$20
 
 _emit	; Don't forget to add in HT, CR, and LF
 	fdb	_constant
-	fcb	$84
+	fcb	$c4
 	fcv	"emit"
 __emit	lbsr	___usne		; Make sure the stack isn't empty
 	pulu	d
@@ -656,7 +437,7 @@ __emit	lbsr	___usne		; Make sure the stack isn't empty
 
 _constant
 	fdb	_variable
-	fcb	$88
+	fcb	$c8
 	fcv	"constant"
 __constant
 	lbsr	___usne
@@ -670,7 +451,7 @@ __constant
 
 _variable
 	fdb	_create
-	fcb	$88
+	fcb	$c8
 	fcv	"variable"
 __variable
 	bsr	__creat
@@ -680,7 +461,7 @@ __variable
 	rts
 
 _create	fdb	_allot
-	fcb	$86
+	fcb	$c6
 	fcv	"create"
 __creat	ldx	tscrsr		; Get the current token stream pos'n
 	ldy	#tokbuf		; Get the token buffer
@@ -714,7 +495,7 @@ __creat	ldx	tscrsr		; Get the current token stream pos'n
 	tfr	y,d		; Get the end of token location
 	subd	#tokbuf		; and determine the length of the token.
 	andb	#$0f		; mask off the word name length,
-	orb	#$80		; mark the word as an interpretable word,
+	orb	#$c0		; mark the word as an immediate word,
 	stb	,x+		; store the name field preamble,
 	andb	#$0f		; restore only a length,
 	pshs	b		; save it for later,
@@ -741,7 +522,7 @@ __creat	ldx	tscrsr		; Get the current token stream pos'n
 	rts
 
 _allot	fdb	_cellp
-	fcb	$85
+	fcb	$c5
 	fcv	"allot"
 __allot	lbsr	___usne
 	pulu	d
@@ -750,7 +531,7 @@ __allot	lbsr	___usne
 	rts
 	
 _cellp	fdb	_cells
-	fcb	$85
+	fcb	$c5
 	fcv	"cell",$2b
 __cellp	lbsr	___usne
 	ldd	,u		
@@ -759,7 +540,7 @@ __cellp	lbsr	___usne
 	rts
 
 _cells	fdb	_fetch
-	fcb	$85
+	fcb	$c5
 	fcv	"cells"
 __cells	lbsr	___usne
 	lsl	1,u		; multiply the low byte by 2
@@ -767,7 +548,7 @@ __cells	lbsr	___usne
 	rts
 
 _fetch	fdb	_store
-	fcb	$81
+	fcb	$c1
 	fcb	$00		;'@'
 __fetch	lbsr	___usne
 	ldd	[,u]		; Grab the value from memory
@@ -775,7 +556,7 @@ __fetch	lbsr	___usne
 	rts
 
 _store	fdb	_here
-	fcb	$81
+	fcb	$c1
 	fcb	$21		;'!'
 __store	lbsr	__depth
 	pulu	d
@@ -789,14 +570,14 @@ __store	lbsr	__depth
 	rts
 
 _here	fdb	_dup
-	fcb	$84
+	fcb	$c4
 	fcv	"here"
 __here	ldd	dsptr		; Get the current data space pointer
 	pshu	d		; and put it on the parameter stack.
 	rts
 
 _dup	fdb	_dropn
-	fcb	$83
+	fcb	$c3
 	fcb	$04,$15,$10	; 'DUP'
 __dup	lbsr	___usne
 	ldd	,u		; Grab the TOS value
@@ -804,7 +585,7 @@ __dup	lbsr	___usne
 	rts
 
 _dropn	fdb	_mstar
-	fcb	$85
+	fcb	$c5
 	fcb	$04,$12,$0f,$10,$0e
 		; 'DROPN'
 __dropn	lbsr	__depth
@@ -823,7 +604,7 @@ __dropn	lbsr	__depth
 2	rts			; and go home.
 
 _mstar	fdb	_star
-	fcb	$82
+	fcb	$c2
 	fcv	"m",$2a
 __mstar	lbsr	__depth
 	pulu	d
@@ -877,7 +658,7 @@ _i_mstr	; Prepare our temporary storage area
 	rts
 
 _star	fdb	_slash
-	fcb	$81
+	fcb	$c1
 	fcb	$2a		; '*'
 __star	lbsr	__depth
 	pulu	d
@@ -891,7 +672,7 @@ __star	lbsr	__depth
 	rts
 
 _slash	fdb	_swap
-	fcb	$81
+	fcb	$c1
 	fcb	$2f
 __slash	lbsr	__depth
 	pulu	d
@@ -913,7 +694,7 @@ __slash	lbsr	__depth
 	rts
 
 _swap	fdb	_sub
-	fcb	$84
+	fcb	$c4
 	fcb	$13,$17,$01,$10
 __swap	lbsr	__depth
 	pulu	d
@@ -927,7 +708,7 @@ __swap	lbsr	__depth
 	rts
 
 _sub	fdb	_drop
-	fcb	$81
+	fcb	$c1
 	fcb	$2d
 __sub	lbsr	__depth
 	pulu	d
@@ -944,21 +725,21 @@ __sub	lbsr	__depth
 	rts
 
 _drop	fdb	_base
-	fcb	$84
+	fcb	$c4
 	fcb	$04,$12,$0f,$10
 __drop	lbsr	___usne
 	leau	2,u		; Drop the stack
 	rts
 
 _base	fdb	_dot
-	fcb	$84
+	fcb	$c4
 	fcb	$02,$01,$13,$05
 __base	ldd	#radix-1	; Get the cell-aligned address of the radix
 	pshu	d		; and drop it on the stack
 	rts
 
 _dot	fdb	_udot
-	fcb	$81
+	fcb	$c1
 	fcb	$2e		; '.'
 	; Step 0: Do the radix check
 __dot	lbsr	___rdck
@@ -981,7 +762,7 @@ __dot	lbsr	___rdck
 !	bra	__d_udt		; Go to the digit printing
 
 _udot	fdb	_add
-	fcb	$82
+	fcb	$c2
 	fcv	"u",$2e		; 'U.'
 	; Step 0: Do the radix check
 __udot	lbsr	___rdck
@@ -1072,7 +853,7 @@ _d_pwdn	leau	2,u		; Dump the parameter stack,
 
 
 _add	fdb	_depth
-	fcb	$81
+	fcb	$c1
 	fcb	$2b		; '+'
 __add	bsr	__depth
 	pulu	d
@@ -1087,7 +868,7 @@ __add	bsr	__depth
 
 
 _depth	fdb	$0000		; The link field
-	fcb	$85		; The name field header
+	fcb	$c5		; The name field header
 		; The name of the word: "DEPTH"
 	fcb	$04,$05,$10,$14,$08
 __depth	tfr	u,d		; We need to do math on the parameter stack loc

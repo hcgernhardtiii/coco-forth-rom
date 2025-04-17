@@ -18,7 +18,7 @@ run: assemble
 	mame coco -debug -skip_gameinfo -window -nomaximize -resolution0 800x600 -bios b10 -ext ""
 
 nodebug: assemble
-	mame coco -skip_gameinfo -nomouse -window -nomaximize -resolution0 1280x1024 -bios b10 -ext ""
+	mame coco -skip_gameinfo -nomouse -window -nomaximize -resolution0 800x600 -bios b10 -ext ""
 
 burnable: assemble
 	dd if=/dev/zero of=tmp bs=8K count=1

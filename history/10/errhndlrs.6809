@@ -37,18 +37,15 @@ _edfalt	ldx	#_mdfalt
 
 _mtoknf	fcv	"I",$20,"don",$27,"t",$20,"know",$20,"what",$20,"that",$20
 	fcv	"means",$2e,0
-_etoknf	lbsr	___cers
-	ldx	#_mtoknf
+_etoknf	ldx	#_mtoknf
 	lbra	eprntr	
 
 _mtokln	fcv	"Sorry",$2c,$20,"I",$20,"got",$20,"bored",$2e,0
-_etokln	lbsr	___cers
-	ldx	#_mtokln
+_etokln	ldx	#_mtokln
 	lbra	eprntr
 
 _mstkdp	fcv	"What",$2c,$20,"nothing",$20,"else",$20,"for",$20,"me",$3f,0
-_estkdp	lbsr	___cers
-	ldx	#_mstkdp
+_estkdp	ldx	#_mstkdp
 	lbra	eprntr
 
 _mdiv0	fcv	"I",$20,"don",$27,"t",$20,"like",$20,"infinities",$2c,$20
@@ -72,8 +69,7 @@ _enptbl	ldx	#_mnptbl
 
 _mmttok	fcv	"There",$27,"s",$20,"nuthin",$27,$20,"left",$20
         fcv	"to",$20,"read",0
-_emttok	lbsr	___cers
-	ldx	#_mmttok
+_emttok	ldx	#_mmttok
 	lbra	eprntr
 
 _mrdxrg	fcv	"I",$20,"can",$27,"t",$20,"count",$20,"right"

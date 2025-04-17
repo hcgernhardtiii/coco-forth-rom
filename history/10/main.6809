@@ -23,7 +23,6 @@ curcrsr rmb	2		; The current cursor location
 prtcrsr	rmb	2		; The current print cursor location
 isshft	rmb	1		; The shift key is down flag
 crsdly	rmb	1		; The cursor delay variable
-toklen	rmb	1		; The length of the token being processed
 tokbuf	rmb	$20		; The token processing buffer
 eotbuf
 dicttop	rmb	2		; The top of the dictionary
@@ -36,10 +35,6 @@ numflgs	rmb	1		; Flags for numeric entry information:
 f_sgn	equ	1		; [0:1] Set if sign marker has been encountered
 f_pfx	equ	2		; [1:1] Set if prefix marker has been encountered
 f_dig	equ	4		; [2:1] Set if a valid digit has been encountered
-
-complst	rmb	1		; The compile state flag
-	rmb	2		; The compile state flag mirror cell
-complmk	rmb	4		; The compile marker data
 
 	org	$a000
 	; System constants
@@ -126,14 +121,6 @@ start	lda	#$ff
 	ldd	#dsstrt		; The start of data space
 	std	dsptr
 	clr	numflgs		; Make sure numeric printing is sane
-	clr	complst		; Make sure we're in interpretation state
-	; Make sure our compile markers are clear.  Empty compile markers
-	;   indicate we don't need to restore to the mark point when a token
-	;   not found error occurs.
-	clr	complmk	
-	clr	complmk+1
-	clr	complmk+2
-	clr	complmk+3
 
 	; Clear out PIA control registers
 	clr	<$01
@@ -351,18 +338,7 @@ chradj_	sta	-1,y		; Store the modified character
 	; Clobbers nothing
 	; Expects the current cursor position in Y
 	; Returns the new current cursor position in Y
-doarrow	tst	isshft		; Are we shifted?
-	beq	2f		; No, so skip over possible printables.
-	cmpa	#$1c		; Is this the down arrow?
-	bne	>		; No, skip forward.
-	lda	#$1b		; Yes, this is a left bracket.  Display it and
-	rts			;   go home.
-!	cmpa	#$1e		; Is this the right arrow?
-	bne	3f		; No, skip arrow key processing entirely.
-	lda	#$1d		; Yes, this is a right bracket.  Display it
-	rts			;   and go home.
-	; Unshifted arrows
-2	cmpa	#$1b		; Is this the up arrow?
+doarrow	cmpa	#$1b		; Is this the up arrow?
 	bne	>		; No, continue
 	lda	#$1e		; Yes, have it display the up arrow
 	rts			; and continue.
@@ -377,7 +353,7 @@ doarrow	tst	isshft		; Are we shifted?
 	lda	-1,y
 	rts
 1	cmpa	#$1d		; Is this the left arrow?
-	bne	3f		; No, continue
+	bne	>		; No, continue
 	leay	-1,y		; Yes; at the least we move back one.
 	lda	#$20
 	sta	,y
@@ -387,7 +363,7 @@ doarrow	tst	isshft		; Are we shifted?
 	lda	#$20		; No, we're doing some clearing.
 	leay	-1,y		; The new cursor position is *behind* the cur-
 	sta	,y		; rent character position.  Clear it.
-3	lda	-1,y		; Make sure we restore the character
+!	lda	-1,y		; Make sure we restore the character
 	rts
 
 	; Displays the current cursor shape in the cursor loop
@@ -432,30 +408,17 @@ procln	ldx	prvcrsr
 3	cmpx	curcrsr		; Have we hit the cursor location?
 	bne	>		; No, skip forward.
 	ldx	prtcrsr
-	lda	#$20		; Yes, we're done, so print the all good
-	sta	,x+		;   message (prefixed with a space):
-	tst	complst		; Are we in compile mode?
-	beq	4f		; No, so let's skip over the compile all good
-	ldd	#$434f		; The compile all good is "COMPILE"
+	lda	#$20		; Yes, we're done, so print the OK,
+	sta	,x+
+	ldd	#$4f4b
 	std	,x++
-	ldd	#$4d50
-	std	,x++
-	ldd	#$494c
-	std	,x++
-	ldb	#$45
-	stb	,x+
-	bra	5f		; We're done with the compile all good
-4	ldd	#$4f4b		; The interpreter all good is "OK"
-	std	,x++
-5	stx	curcrsr		; update the cursor position,
+	stx	curcrsr		; update the cursor position,
 	rts			; and go home.
 !	cmpa	,x+		; Are we at the beginning of the token?
 	beq	3b		; No, move forward and continue.
 	leax	-1,x		; Back up one 'cause we overshot
-	clr	toklen		; This is a new token; zero the length
 1	ldb	,x+		; Load the character
 	stb	,y+		; Put it in the token buffer
-	inc	toklen		; increment the token length
 	cmpy	#tokbuf+$20	; Have we overflowed the token buffer?
 	bne	>		; No, keep going.
 	jmp	[e_tokln]	; Yes, trigger the error.
@@ -468,38 +431,12 @@ procln	ldx	prvcrsr
 	bra	2b		; And continue the line scan
 
 	; Dispatch the processing of a token
-proctk	pshs	y,d
+proctk	pshs	d
 	stx	tscrsr		; Save the token stream cursor value
-	ldy	#toklen		; This is effectively the c-addr for the token
-	pshu	y		;   that we'll be feeding to
-	lbsr	_i_find		;   find.
-	pulu	d		; Get our result flag.  It's going to be 0 (not
-	tstb			;   found), -1 (interprable), or 1 (compile)
-	bne	>		; Zero means it wasn't found.
-	leau	2,u		; If it wasn't found, drop the token c-addr,
-	ldy	2,s		;   restore the end-of-token location,
-	bsr	procnum		;   and try as a number.
-	tst	complst		; Are we in compile state?
-	beq	1f		; No, so let's just go home.
-	lbsr	_i_literal	; Yes, so process a literal		
-	bra	1f		;   and go home.
-	; If we're here, the word has been found.  For now we're not worrying
-	;   about compile mode.
-!	tst	complst		; Are we in compile mode?
-	beq	2f		; No, so skip to the interpretation mode check
-	; If we're here, we're in compile mode.
-	tstb			; Is this an immediate/compile word?
-	bmi	>		; No, skip forward to the compile call
-	lbsr	_i_execute	; Yes, run the execution
-	bra	1f		; Clean up and go home
-!	lbsr	_i_compilec	; Compile the word into the current definition
-	bra	1f		; Clean up and go home
-	; If we're here, we're in interpretation mode.
-2	tstb			; Is this an immediate/compile word?
-	bmi	>		; No, Skip forward to execution
-	jmp	[e_notim]	; Yes, throw the error and clean up
-!	lbsr	_i_execute	; Execute the word
-1	puls	y,d
+	lbsr	srchdct
+	bcc	>		; Carry set means the word wasn't found
+	bsr	procnum		; If it wasn't found, try as a number
+!	puls	d
 	ldx	tscrsr		; Restore the token stream cursor value
 	rts
 
@@ -619,12 +556,11 @@ srchdct	ldx	dicttop		; Get the first dictionary item
 3	inca			; Increment our position offset
 	cmpy	,s		; Are we at the end of the token?
 	bne	<		; No, so loop back
-	; If we're here, we've found the word.  Let's check if it's valid for
-	;   interpretation state.
-	ldb	#$10
-	bitb	2,x		; Check the compile-only bit
-	beq	>		; It's not compile only, so we can move on.
-	ldx	#e_notim	; It's compile only, so error out
+	; If we're here, we've found the word.  Let's check if it's immediate.
+	ldb	#$40
+	bitb	2,x		; Check the immediate bit
+	bne	>		; It's immediate, so we can move on.
+	ldx	#e_notim	; It's not immediate, so error out
 	swi
 	; Since we've already saved Y, we will also save X and D here so
 	; they're freely available for the word we're calling.
@@ -749,28 +685,6 @@ ___sckd ldb	,u
 	eorb	numflgs
 	stb	numflgs
 !	rts
-
-	; Checks to see if we need to restore from an error while compiling a
-	;   definition.  Called by the error handlers, so it doesn't need to
-	;   worry about what registers it clobbers.
-___cers	; First, let's check the compile markers to see if we need to restore
-	ldd	complmk		; Is the old dicttop empty?
-	bne	>		; No, skip to restoration.
-	ldd	complmk+2	; Is the old dsptr empty?
-	bne	>		; No, skip to restoration.
-	bra	1f		; All is clear, skip over restoration.
-	; If we're here, we're restoring the old dicttop and dsptr.
-!	ldd	complmk
-	std	dicttop
-	ldd	complmk+2
-	std	dsptr
-	; Now we need to clear out the restore markers
-	clr	complmk	
-	clr	complmk+1
-	clr	complmk+2
-	clr	complmk+3
-	; If we're here, we're done and can present the error.
-1	rts
 
 	include "errhndlrs.6809"
 
