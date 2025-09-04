@@ -1,212 +1,4 @@
 _dicttop
-_gtz	fdb	_ltz
-	fcb	$82
-	fcb	$30,$3e
-__gtz	lbsr	___usne
-	pulu	d
-	cmpd	#0
-	lbgt	__true
-	lble	__false
-	rts
-
-_ltz	fdb	_nez
-	fcb	$82
-	fcb	$30,$3c
-__ltz	lbsr	___usne
-	pulu	d
-	cmpd	#0
-	lblt	__true
-	lbge	__false
-	rts
-
-_nez	fdb	_ne
-	fcb	$83
-	fcb	$30,$3c,$3e
-__nez	lbsr	__eqz
-	lbra	__eqz
-
-_ne	fdb	_ult
-	fcb	$82
-	fcb	$3c,$3e
-__ne	lbsr	__eq
-	lbra	__eqz
-
-_ult	fdb	_ugt
-	fcb	$82
-	fcv	"u",$3c
-__ult	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	cmpd	,u++
-	lbhi	__true
-	lbls	__false
-	rts
-
-_ugt	fdb	_dot_s
-	fcb	$82
-	fcv	"u",$3e
-__ugt	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	cmpd	,u++
-	lblo	__true
-	lbhs	__false
-	rts
-
-_dot_s	fdb	_rot
-	fcb	$82
-	fcv	$2e,"s"
-__dot_s	; prefix a space character
-	ldx	prtcrsr
-	ldb	#$20
-	stb	,x+
-	stx	prtcrsr		; Update the prtcrsr position, but we also
-	pshs	x		;   need to hang onto this for later
-	; print the stack depth
-	lbsr	__depth
-	lbsr	__d_udt
-	; This is why we saved prtcrsr earlier.  We replace the space that
-	;   `__d_udt` placed with a '<'
-	ldb	#$7c		; '<'
-	stb	[,s++]		; A little stack magic here
-	ldb	#$7e		; '>'
-	ldx	prtcrsr
-	stb	,x+		; emit the '>'
-	stx	prtcrsr		; update the cursor location
-	lbsr	scrlchk		; scroll if we want to…  scroll around the world
-	; Here we're going to set up to print the stack contents non-
-	;   destructively
-	ldy	#prmstk		; Let's get to the bottom of the stack
-	pshs	u		; We'll need this for some comparisons
-	; Now we begin our loop structure
-!	cmpy	,s		; Are we at the top of the stack?
-	beq	>		; Yes, so end the loop.
-	ldd	,--y		; No, so grab the value
-	; This next bit prints the number and preserves our local vars
-	pshu	d
-	pshs	x,y
-	lbsr	__dot
-	lbsr	scrlchk		; `__d_udt` doesn't scroll check.  Fix this.
-	puls	x,y
-	; And then wrap back to the top of the loop
-	bra	<
-!	leas	2,s		; Clear our saved top of stack
-	rts			; and go home.
-
-_rot	fdb	_over
-	fcb	$83
-	fcv	"rot"
-__rot	lbsr	__depth
-	pulu	d
-	cmpb	#$03
-	bhs	_i_rot
-	ldx	#e_stkdp
-	swi
-_i_rot	pulu d,x,y
-	pshu d,x
-	pshu y
-	rts
-
-_over	fdb	_not
-	fcb	$84
-	fcv	"over"
-__over	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	_i_over
-	ldx	#e_stkdp
-	swi
-_i_over	ldd	2,u
-	pshu	d
-	rts	
-
-_not	fdb	_gt
-	fcb	$83
-	fcv	"not"
-	lbra	__eqz
-
-_gt	fdb	_lt
-	fcb	$81
-	fcb	$3e		; '>'
-__gt	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	cmpd	,u++
-	blt	__true
-	bge	__false
-	rts
-
-_lt	fdb	_eqz
-	fcb	$81
-	fcb	$3c		; '<'
-__lt	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	cmpd	,u++
-	bgt	__true
-	ble	__false
-	rts
-
-_eqz	fdb	_eq
-	fcb	$82
-	fcb	$30,$3d		; '0='
-__eqz	lbsr	___usne
-	pulu	d
-	cmpd	#0
-	beq	__true
-	bne	__false
-	rts
-
-_eq	fdb	_true
-	fcb	$81
-	fcb	$3d		; '='
-__eq	lbsr	__depth
-	pulu	d
-	cmpb	#$02
-	bhs	>
-	ldx	#e_stkdp
-	swi
-!	pulu	d
-	cmpd	,u++
-	beq	__true
-	bne	__false
-	rts
-
-_true
-	fdb	_false
-	fcb	$84
-	fcv	"true"
-__true	clra
-	clrb
-	; flip all the bits
-	coma
-	comb
-	pshu d
-	rts
-
-_false	fdb	_colon
-	fcb	$85
-	fcv	"false"
-__false	clra
-	clrb
-	pshu d
-	rts
 
 _colon	fdb	_semicolon
 	fcb	$81
@@ -437,7 +229,7 @@ __and	lbsr	__depth
 	swi
 !	pulu	d
 	anda	,u
-	andb	1,u
+	andb	,u+1
 	std	,u
 	rts
 
@@ -452,7 +244,7 @@ __or	lbsr	__depth
 	swi
 !	pulu	d
 	ora	,u
-	orb	1,u
+	orb	,u+1
 	std	,u
 	rts
 
@@ -467,7 +259,7 @@ __xor	lbsr	__depth
 	swi
 !	pulu	d
 	eora	,u
-	eorb	1,u
+	eorb	,u+1
 	std	,u
 	rts
 
